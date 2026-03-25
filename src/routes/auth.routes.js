@@ -6,23 +6,27 @@ const bcrypt = require('bcryptjs');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key-citax';
 
+function toSlug(text) {
+    return text.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9\s-]/g, '')
+        .trim().replace(/\s+/g, '-')
+        .substring(0, 50);
+}
+
 router.post('/login', async (req, res) => {
     const { email, password } = req.body;
-
     try {
         const [rows] = await pool.execute('SELECT * FROM USUARIO WHERE email = ?', [email]);
         const user = rows[0];
 
-        if (!user) {
-            return res.status(401).json({ error: 'Credenciales inválidas' });
-        }
+        if (!user) return res.status(401).json({ error: 'Credenciales inválidas' });
 
         const isMatch = await bcrypt.compare(password, user.password_hash);
         if (!isMatch && password !== user.password_hash) {
             return res.status(401).json({ error: 'Credenciales inválidas' });
         }
 
-        // Get associated company
         const [empresaRows] = await pool.execute('SELECT * FROM EMPRESA WHERE id_usuario = ?', [user.id_usuario]);
         const empresa = empresaRows[0];
         
@@ -42,7 +46,8 @@ router.post('/login', async (req, res) => {
                 apellido: user.apellido,
                 rol: user.rol,
                 empresa_id: empresa?.id_empresa,
-                nombre_comercial: empresa?.nombre_comercial
+                nombre_comercial: empresa?.nombre_comercial,
+                slug: empresa?.slug
             }
         });
     } catch (err) {
@@ -54,21 +59,23 @@ router.post('/login', async (req, res) => {
 router.post('/register', async (req, res) => {
     const { email, password, nombre, apellido, nombre_comercial } = req.body;
     const connection = await pool.getConnection();
-
     try {
         await connection.beginTransaction();
 
         const hashedPassword = await bcrypt.hash(password, 10);
-        
         const [userResult] = await connection.execute(
             'INSERT INTO USUARIO (email, password_hash, nombre, apellido, rol) VALUES (?, ?, ?, ?, ?)',
             [email, hashedPassword, nombre, apellido, 'admin_empresa']
         );
         const userId = userResult.insertId;
 
+        let slug = toSlug(nombre_comercial);
+        const [slugCheck] = await connection.execute('SELECT id_empresa FROM EMPRESA WHERE slug = ?', [slug]);
+        if (slugCheck.length > 0) slug = `${slug}-${Date.now()}`;
+
         const [empresaResult] = await connection.execute(
-            'INSERT INTO EMPRESA (id_usuario, nombre_comercial, config_recordatorios, horarios_disponibilidad) VALUES (?, ?, ?, ?)',
-            [userId, nombre_comercial, 
+            'INSERT INTO EMPRESA (id_usuario, nombre_comercial, slug, config_recordatorios, horarios_disponibilidad) VALUES (?, ?, ?, ?, ?)',
+            [userId, nombre_comercial, slug,
                 JSON.stringify({
                     recordatorio_activo: false,
                     recordatorio_offsets_minutos: [1440],
@@ -79,7 +86,7 @@ router.post('/register', async (req, res) => {
         );
 
         await connection.commit();
-        res.status(201).json({ id_usuario: userId, id_empresa: empresaResult.insertId });
+        res.status(201).json({ id_usuario: userId, id_empresa: empresaResult.insertId, slug });
     } catch (err) {
         await connection.rollback();
         console.error(err);

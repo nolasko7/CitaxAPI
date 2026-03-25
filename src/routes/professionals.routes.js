@@ -2,28 +2,113 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const authMiddleware = require('../middlewares/auth.middleware');
+const bcrypt = require('bcryptjs');
 
 router.use(authMiddleware);
 
+// GET /api/professionals - List all (existing)
 router.get('/', async (req, res) => {
     try {
         const query = `
-            SELECT p.*, u.nombre, u.apellido 
+            SELECT p.id_prestador, p.activo, u.id_usuario, u.nombre, u.apellido, u.email
             FROM PRESTADOR p
             JOIN USUARIO u ON p.id_usuario = u.id_usuario
-            WHERE p.id_empresa = ? AND p.activo = 1
+            WHERE p.id_empresa = ?
         `;
         const [rows] = await pool.execute(query, [req.user.id_empresa]);
-
         const formatted = rows.map(p => ({
             id: p.id_prestador,
+            id_usuario: p.id_usuario,
             nombre: p.nombre,
-            apellido: p.apellido
+            apellido: p.apellido,
+            email: p.email,
+            activo: p.activo
         }));
-
         res.json(formatted);
     } catch (err) {
         res.status(500).json({ error: 'Error al obtener profesionales' });
+    }
+});
+
+// POST /api/professionals - Create a new prestador
+router.post('/', async (req, res) => {
+    const { nombre, apellido, email, password } = req.body;
+    const connection = await pool.getConnection();
+
+    try {
+        await connection.beginTransaction();
+
+        // Check for duplicate email
+        const [existing] = await connection.execute('SELECT id_usuario FROM USUARIO WHERE email = ?', [email]);
+        if (existing.length > 0) {
+            connection.release();
+            return res.status(409).json({ error: 'Ya existe un usuario con ese email' });
+        }
+
+        const hash = await bcrypt.hash(password || 'citax1234', 10);
+        const [userRes] = await connection.execute(
+            'INSERT INTO USUARIO (email, password_hash, nombre, apellido, rol) VALUES (?, ?, ?, ?, ?)',
+            [email, hash, nombre, apellido, 'prestador']
+        );
+
+        const [prestRes] = await connection.execute(
+            'INSERT INTO PRESTADOR (id_usuario, id_empresa, activo) VALUES (?, ?, ?)',
+            [userRes.insertId, req.user.id_empresa, 1]
+        );
+
+        await connection.commit();
+        res.status(201).json({
+            id: prestRes.insertId,
+            nombre, apellido, email, activo: true
+        });
+    } catch (err) {
+        await connection.rollback();
+        console.error(err);
+        res.status(500).json({ error: 'Error al crear prestador' });
+    } finally {
+        connection.release();
+    }
+});
+
+// PATCH /api/professionals/:id - Toggle activo
+router.patch('/:id', async (req, res) => {
+    const { activo } = req.body;
+    try {
+        await pool.execute(
+            'UPDATE PRESTADOR SET activo = ? WHERE id_prestador = ? AND id_empresa = ?',
+            [activo ? 1 : 0, req.params.id, req.user.id_empresa]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al actualizar prestador' });
+    }
+});
+
+// DELETE /api/professionals/:id
+router.delete('/:id', async (req, res) => {
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+        // Get the user ID first
+        const [rows] = await connection.execute(
+            'SELECT id_usuario FROM PRESTADOR WHERE id_prestador = ? AND id_empresa = ?',
+            [req.params.id, req.user.id_empresa]
+        );
+        if (rows.length === 0) {
+            connection.release();
+            return res.status(404).json({ error: 'Prestador no encontrado' });
+        }
+        const id_usuario = rows[0].id_usuario;
+        await connection.execute('DELETE FROM PRESTADOR WHERE id_prestador = ?', [req.params.id]);
+        await connection.execute('DELETE FROM USUARIO WHERE id_usuario = ?', [id_usuario]);
+        await connection.commit();
+        res.json({ success: true });
+    } catch (err) {
+        await connection.rollback();
+        console.error(err);
+        res.status(500).json({ error: 'Error al eliminar prestador' });
+    } finally {
+        connection.release();
     }
 });
 
