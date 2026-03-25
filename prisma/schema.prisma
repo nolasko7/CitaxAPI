@@ -61,20 +61,32 @@ model PRESTADOR {
   id_empresa   Int
   activo       Boolean? @default(true)
   EMPRESA      EMPRESA  @relation(fields: [id_empresa], references: [id_empresa], onDelete: Cascade, onUpdate: NoAction, map: "fk_prestador_empresa")
-  USUARIO      USUARIO  @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade, onUpdate: NoAction, map: "fk_prestador_usuario")
+  USUARIO      USUARIO              @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade, onUpdate: NoAction, map: "fk_prestador_usuario")
   TURNO        TURNO[]
+  SERVICIOS    PRESTADOR_SERVICIO[]
 
   @@index([id_empresa], map: "fk_prestador_empresa")
+}
+
+model PRESTADOR_SERVICIO {
+  id_prestador Int
+  id_servicio  Int
+  PRESTADOR    PRESTADOR @relation(fields: [id_prestador], references: [id_prestador], onDelete: Cascade, onUpdate: NoAction)
+  SERVICIO     SERVICIO  @relation(fields: [id_servicio], references: [id_servicio], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([id_prestador, id_servicio])
 }
 
 model SERVICIO {
   id_servicio      Int     @id @default(autoincrement())
   id_empresa       Int
-  nombre           String  @db.VarChar(255)
+  nombre           String               @db.VarChar(255)
+  descripcion      String?              @db.Text
   duracion_minutos Int
-  precio           Decimal @db.Decimal(10, 2)
-  EMPRESA          EMPRESA @relation(fields: [id_empresa], references: [id_empresa], onDelete: Cascade, onUpdate: NoAction, map: "fk_servicio_empresa")
+  precio           Decimal              @db.Decimal(10, 2)
+  EMPRESA          EMPRESA              @relation(fields: [id_empresa], references: [id_empresa], onDelete: Cascade, onUpdate: NoAction, map: "fk_servicio_empresa")
   TURNO            TURNO[]
+  PRESTADORES      PRESTADOR_SERVICIO[]
 
   @@index([id_empresa], map: "fk_servicio_empresa")
 }
