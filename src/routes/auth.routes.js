@@ -29,11 +29,25 @@ router.post('/login', async (req, res) => {
 
         const [empresaRows] = await pool.execute('SELECT * FROM EMPRESA WHERE id_usuario = ?', [user.id_usuario]);
         const empresa = empresaRows[0];
+
+        // If user is a prestador, look up their PRESTADOR record + parent EMPRESA
+        let prestadorData = null;
+        if (user.rol === 'prestador') {
+            const [prestRows] = await pool.execute(
+                `SELECT p.id_prestador, p.id_empresa, e.nombre_comercial, e.slug
+                 FROM PRESTADOR p
+                 JOIN EMPRESA e ON p.id_empresa = e.id_empresa
+                 WHERE p.id_usuario = ?`,
+                [user.id_usuario]
+            );
+            prestadorData = prestRows[0];
+        }
         
         const token = jwt.sign({
             id_usuario: user.id_usuario,
             email: user.email,
-            id_empresa: empresa?.id_empresa,
+            id_empresa: empresa?.id_empresa || prestadorData?.id_empresa || null,
+            id_prestador: prestadorData?.id_prestador || null,
             rol: user.rol
         }, JWT_SECRET, { expiresIn: '24h' });
 
@@ -45,9 +59,10 @@ router.post('/login', async (req, res) => {
                 nombre: user.nombre,
                 apellido: user.apellido,
                 rol: user.rol,
-                empresa_id: empresa?.id_empresa,
-                nombre_comercial: empresa?.nombre_comercial,
-                slug: empresa?.slug
+                id_prestador: prestadorData?.id_prestador || null,
+                empresa_id: empresa?.id_empresa || prestadorData?.id_empresa || null,
+                nombre_comercial: empresa?.nombre_comercial || prestadorData?.nombre_comercial || null,
+                slug: empresa?.slug || prestadorData?.slug || null
             }
         });
     } catch (err) {

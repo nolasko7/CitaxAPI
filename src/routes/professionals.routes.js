@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const authMiddleware = require('../middlewares/auth.middleware');
+const { requireRole } = require('../middlewares/role.middleware');
 const bcrypt = require('bcryptjs');
 
 router.use(authMiddleware);
@@ -30,8 +31,8 @@ router.get('/', async (req, res) => {
     }
 });
 
-// POST /api/professionals - Create a new prestador
-router.post('/', async (req, res) => {
+// POST /api/professionals - Create a new prestador (empresa only)
+router.post('/', requireRole('admin_empresa'), async (req, res) => {
     const { nombre, apellido, email, password } = req.body;
     const connection = await pool.getConnection();
 
@@ -70,8 +71,8 @@ router.post('/', async (req, res) => {
     }
 });
 
-// PATCH /api/professionals/:id - Toggle activo
-router.patch('/:id', async (req, res) => {
+// PATCH /api/professionals/:id - Toggle activo (empresa only)
+router.patch('/:id', requireRole('admin_empresa'), async (req, res) => {
     const { activo } = req.body;
     try {
         await pool.execute(
@@ -84,8 +85,8 @@ router.patch('/:id', async (req, res) => {
     }
 });
 
-// DELETE /api/professionals/:id
-router.delete('/:id', async (req, res) => {
+// DELETE /api/professionals/:id (empresa only)
+router.delete('/:id', requireRole('admin_empresa'), async (req, res) => {
     const connection = await pool.getConnection();
     try {
         await connection.beginTransaction();
@@ -99,8 +100,17 @@ router.delete('/:id', async (req, res) => {
             return res.status(404).json({ error: 'Prestador no encontrado' });
         }
         const id_usuario = rows[0].id_usuario;
+        
+        // Remove the professional record
         await connection.execute('DELETE FROM PRESTADOR WHERE id_prestador = ?', [req.params.id]);
-        await connection.execute('DELETE FROM USUARIO WHERE id_usuario = ?', [id_usuario]);
+        
+        // ONLY delete the user record if they are NOT the owner of the company
+        const [ownerRows] = await connection.execute('SELECT id_usuario FROM EMPRESA WHERE id_empresa = ?', [req.user.id_empresa]);
+        const ownerId = ownerRows[0]?.id_usuario;
+        
+        if (id_usuario !== ownerId) {
+            await connection.execute('DELETE FROM USUARIO WHERE id_usuario = ?', [id_usuario]);
+        }
         await connection.commit();
         res.json({ success: true });
     } catch (err) {
