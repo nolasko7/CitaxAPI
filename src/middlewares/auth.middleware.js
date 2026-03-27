@@ -9,7 +9,11 @@ const authMiddleware = (req, res, next) => {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'No token provided' });
+        return res.status(401).json({ 
+            error: 'No token provided', 
+            debug_url: req.originalUrl,
+            debug_path: req.path 
+        });
     }
 
     const token = authHeader.split(' ')[1];
