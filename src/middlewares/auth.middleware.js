@@ -1,7 +1,8 @@
 const jwt = require('jsonwebtoken');
 
 const authMiddleware = (req, res, next) => {
-    if (req.path.includes('/webhook/')) {
+    // Bypass authentication for webhooks
+    if (req.originalUrl.toLowerCase().includes('/webhook')) {
         return next();
     }
 
