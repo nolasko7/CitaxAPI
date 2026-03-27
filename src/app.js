@@ -37,6 +37,7 @@ app.use('/api/config', configRoutes);
 app.use('/api/services', servicesRoutes);
 app.use('/api/professionals', professionalsRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
+app.post('/api/webhook', require('./controllers/whatsapp.controller').handleWebhook);
 
 // Error handler
 app.use((err, req, res, next) => {

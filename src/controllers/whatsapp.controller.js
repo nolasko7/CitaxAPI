@@ -140,7 +140,7 @@ const disconnectCurrentInstance = async (req, res, next) => {
 
 const handleWebhook = async (req, res, next) => {
   try {
-    const instanceName = normalizeInstanceName(req.params.instanceName);
+    const instanceName = normalizeInstanceName(req.params.instanceName || req.body?.instance || req.body?.instanceName);
     const payload = req.body;
 
     console.log("WEBHOOK RECIBIDO:", {
