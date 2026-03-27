@@ -36,6 +36,75 @@ const buildInstanceName = ({ companyId }) => {
   return normalizeInstanceName(`citax-empresa-${companyId}-whatsapp`);
 };
 
+const ensureDataImageUrl = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("data:image/")) return raw;
+  if (/^[A-Za-z0-9+/=\r\n]+$/.test(raw)) {
+    return `data:image/png;base64,${raw.replace(/\s+/g, "")}`;
+  }
+  return "";
+};
+
+const getQrPayloadCandidates = (payload) => {
+  if (!payload) return [];
+  if (typeof payload === "string") return [payload];
+  return [
+    payload.qr,
+    payload.qrcode,
+    payload.code,
+    payload.base64,
+    payload.imageDataUrl,
+    payload.data,
+    payload.data?.qr,
+    payload.data?.qrcode,
+    payload.data?.code,
+    payload.data?.base64,
+    payload.data?.imageDataUrl,
+  ].filter(Boolean);
+};
+
+const normalizeQrPayload = (payload) => {
+  const qr = {
+    code: "",
+    pairingCode: "",
+    imageDataUrl: "",
+    source: "none",
+  };
+
+  const candidates = getQrPayloadCandidates(payload);
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+
+    if (typeof candidate === "string") {
+      const asImage = ensureDataImageUrl(candidate);
+      if (asImage && !qr.imageDataUrl) qr.imageDataUrl = asImage;
+      else if (!qr.code) qr.code = candidate.trim();
+      continue;
+    }
+
+    if (typeof candidate === "object") {
+      if (!qr.code && typeof candidate.code === "string") {
+        qr.code = candidate.code.trim();
+      }
+      if (!qr.pairingCode && typeof candidate.pairingCode === "string") {
+        qr.pairingCode = candidate.pairingCode.trim();
+      }
+      if (!qr.imageDataUrl && typeof candidate.base64 === "string") {
+        qr.imageDataUrl = ensureDataImageUrl(candidate.base64);
+      }
+      if (!qr.imageDataUrl && typeof candidate.imageDataUrl === "string") {
+        qr.imageDataUrl = ensureDataImageUrl(candidate.imageDataUrl);
+      }
+    }
+  }
+
+  if (qr.code) qr.source = "code";
+  else if (qr.imageDataUrl) qr.source = "image";
+
+  return qr;
+};
+
 const getConnectionState = async (instanceName) => {
   const normalizedInstanceName = normalizeInstanceName(instanceName);
   const response = await evolutionClient.get(
@@ -55,6 +124,33 @@ const getSafeConnectionState = async (instanceName) => {
       reason: error.response?.data || error.message,
     };
   }
+};
+
+const qrStore = new Map();
+
+const storeLatestQr = (instanceName, payload) => {
+  const key = normalizeInstanceName(instanceName);
+  const normalizedQr = normalizeQrPayload(payload);
+  if (normalizedQr.source === "none") {
+    qrStore.delete(key);
+    return normalizedQr;
+  }
+  qrStore.set(key, normalizedQr);
+  return normalizedQr;
+};
+
+const getLatestQr = (instanceName) => {
+  const key = normalizeInstanceName(instanceName);
+  return qrStore.get(key) || {
+    code: "",
+    pairingCode: "",
+    imageDataUrl: "",
+    source: "none",
+  };
+};
+
+const clearLatestQr = (instanceName) => {
+  qrStore.delete(normalizeInstanceName(instanceName));
 };
 
 const registerWebhook = async (instanceName) => {
@@ -110,9 +206,11 @@ const createInstanceWithQr = async ({ instanceName, number = null, companyId }) 
 
   const connectionState = await getSafeConnectionState(resolvedInstanceName);
   const webhook = await registerWebhook(resolvedInstanceName);
+  const qr = storeLatestQr(resolvedInstanceName, response.data);
 
   return {
     instanceName: resolvedInstanceName,
+    qr,
     qrcode: response.data?.qrcode || null,
     raw: response.data,
     connectionState,
@@ -126,10 +224,12 @@ const disconnectInstance = async (instanceName) => {
     const response = await evolutionClient.delete(
       `/instance/logout/${normalizedInstanceName}`
     );
+    clearLatestQr(normalizedInstanceName);
     return { success: true, instanceName: normalizedInstanceName, response: response.data };
   } catch (error) {
     const status = error.response?.status;
     if (status === 404 || status === 400) {
+      clearLatestQr(normalizedInstanceName);
       return {
         success: true,
         instanceName: normalizedInstanceName,
@@ -289,11 +389,15 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
 module.exports = {
   buildInstanceName,
   createInstanceWithQr,
+  clearLatestQr,
   disconnectInstance,
   getConnectionState,
+  getLatestQr,
   getRecentMessages,
   getSafeConnectionState,
   normalizeInstanceName,
+  normalizeQrPayload,
   processIncomingMessage,
   sendTextMessage,
+  storeLatestQr,
 };
