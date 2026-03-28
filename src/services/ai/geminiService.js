@@ -41,6 +41,7 @@ const createModel = () => {
     model: GEMINI_MODEL,
     temperature: 0,
     maxRetries: 2,
+    convertSystemMessageToHumanContent: true,
   });
 };
 
