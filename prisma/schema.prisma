@@ -62,6 +62,7 @@ model PRESTADOR {
   id_usuario   Int      @unique(map: "id_usuario")
   id_empresa   Int
   activo       Boolean? @default(true)
+  horarios_disponibilidad Json?
   EMPRESA      EMPRESA  @relation(fields: [id_empresa], references: [id_empresa], onDelete: Cascade, onUpdate: NoAction, map: "fk_prestador_empresa")
   USUARIO      USUARIO              @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade, onUpdate: NoAction, map: "fk_prestador_usuario")
   TURNO        TURNO[]

@@ -1,4 +1,8 @@
 const prisma = require("../../config/prisma");
+const {
+  buildAvailabilityMap,
+  resolveEffectiveAvailability,
+} = require("../../utils/availabilitySchedule");
 
 const DEFAULT_TIMEZONE = "America/Argentina/Buenos_Aires";
 
@@ -99,6 +103,12 @@ const getCompanyContextByInstanceName = async (instanceName, customerPhone = nul
       duration: ps.SERVICIO.duracion_minutos,
       price: Number(ps.SERVICIO.precio),
     })),
+    horarios_disponibilidad: p.horarios_disponibilidad || null,
+    availability: resolveEffectiveAvailability({
+      ownConfig: p.horarios_disponibilidad,
+      companyConfig: empresa.horarios_disponibilidad,
+    }),
+    usesFallbackAvailability: p.horarios_disponibilidad == null,
   }));
 
   const services = empresa.SERVICIO.map((s) => ({
@@ -182,19 +192,7 @@ const listAvailableSlots = async ({ companyId, professionalName, startDate, endD
 
   if (!empresa) return [];
 
-  // Parse horarios_disponibilidad — format: { config: [{ dia_semana, hora_desde, hora_hasta, activo }] }
-  const horariosRaw = empresa.horarios_disponibilidad || {};
-  const horariosConfig = Array.isArray(horariosRaw.config) ? horariosRaw.config : [];
-
-  // Build a map: dia_semana (1-7) -> [{ start, end }]
-  const horariosMap = {};
-  for (const h of horariosConfig) {
-    if (h.activo && h.hora_desde && h.hora_hasta) {
-      const day = Number(h.dia_semana);
-      if (!horariosMap[day]) horariosMap[day] = [];
-      horariosMap[day].push({ start: h.hora_desde, end: h.hora_hasta });
-    }
-  }
+  const companyConfig = empresa.horarios_disponibilidad;
 
   let prestadores = empresa.PRESTADOR;
   if (professionalName) {
@@ -221,14 +219,26 @@ const listAvailableSlots = async ({ companyId, professionalName, startDate, endD
 
   const slots = [];
   const defaultDuration = 30;
+  const prestadoresConAgenda = prestadores.map((prestador) => {
+    const availability = resolveEffectiveAvailability({
+      ownConfig: prestador.horarios_disponibilidad,
+      companyConfig,
+    });
+
+    return {
+      ...prestador,
+      availability,
+      availabilityMap: buildAvailabilityMap(availability.config),
+    };
+  });
 
   for (let cursor = normalizedStart; cursor <= normalizedEnd; cursor = addDays(cursor, 1)) {
     const weekday = toWeekdayNumber(cursor);
-    const daySchedules = horariosMap[weekday];
-    if (!daySchedules || !daySchedules.length) continue;
 
-    for (const prestador of prestadores) {
+    for (const prestador of prestadoresConAgenda) {
       const duration = prestador.SERVICIOS[0]?.SERVICIO?.duracion_minutos || defaultDuration;
+      const daySchedules = prestador.availabilityMap[weekday];
+      if (!daySchedules || !daySchedules.length) continue;
 
       for (const daySchedule of daySchedules) {
         let slotStart = combineDateTime(cursor, daySchedule.start);
@@ -254,6 +264,7 @@ const listAvailableSlots = async ({ companyId, professionalName, startDate, endD
               time: `${pad(slotStart.getHours())}:${pad(slotStart.getMinutes())}`,
               endTime: `${pad(slotEnd.getHours())}:${pad(slotEnd.getMinutes())}`,
               duration,
+              scheduleSource: prestador.availability.source,
             });
           }
 
