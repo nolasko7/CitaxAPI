@@ -261,10 +261,23 @@ const extractIncomingMessages = (webhookData) => {
   if (!webhookData) return [];
   const event = webhookData.event || webhookData.type || "";
   if (event !== "messages.upsert") return [];
-  const data = webhookData.data || webhookData;
-  if (Array.isArray(data)) return data;
-  if (data.key || data.message) return [data];
-  return [];
+  const candidateLists = [
+    webhookData?.data?.messages,
+    webhookData?.messages,
+    webhookData?.message,
+  ].filter(Boolean);
+
+  const flattenedCandidates = candidateLists.flatMap((item) =>
+    Array.isArray(item) ? item : [item]
+  );
+
+  if (webhookData?.data) {
+    flattenedCandidates.unshift(webhookData.data);
+  }
+
+  return flattenedCandidates.filter(
+    (item) => item && (item.key || item.message || item.messageType || item.type)
+  );
 };
 
 // ─── Help identify the actual message content (skipping wrappers) ────────
@@ -278,6 +291,58 @@ const unwrapMessage = (msg) => {
   
   const type = Object.keys(msg)[0] || "unknown";
   return { type, content: msg[type] || {} };
+};
+
+const extractTextFromMessage = (msg, content) => {
+  return (
+    msg?.conversation ||
+    msg?.extendedTextMessage?.text ||
+    msg?.imageMessage?.caption ||
+    msg?.videoMessage?.caption ||
+    msg?.documentWithCaptionMessage?.message?.documentMessage?.caption ||
+    content?.caption ||
+    content?.text ||
+    content?.contentText ||
+    content?.description ||
+    ""
+  );
+};
+
+const detectAudioMessage = ({ rawType, messageType, content, msg }) => {
+  const candidates = [
+    rawType,
+    messageType,
+    content?.mimetype,
+    msg?.audio?.mimetype,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase());
+
+  if (candidates.some((value) => value.includes("audio"))) {
+    return true;
+  }
+
+  return Boolean(
+    msg?.audioMessage ||
+      msg?.audio ||
+      content?.ptt === true ||
+      content?.seconds ||
+      content?.waveform
+  );
+};
+
+const hasProcessableText = (value) => {
+  const normalized = String(value || "").trim();
+  if (!normalized) return false;
+
+  const placeholders = new Set([
+    "[error al descargar el audio]",
+    "[audio recibido, pero falló la transcripción]",
+    "[audio recibido, pero la transcripción por ia no está configurada]",
+    "[audio recibido, pero la transcripcion por ia no esta configurada]",
+  ]);
+
+  return !placeholders.has(normalized.toLowerCase());
 };
 
 // ─── Normalize an incoming message ────────────────────────────────────
@@ -294,13 +359,14 @@ const normalizeIncomingMessage = (instanceName, raw, webhookData) => {
 
   // Determine message type (unwrapped)
   const { type: messageType, content } = unwrapMessage(msg);
+  const rawType =
+    raw?.messageType ||
+    raw?.type ||
+    webhookData?.data?.messageType ||
+    messageType;
 
-  const text =
-    msg.conversation ||
-    msg.extendedTextMessage?.text ||
-    content.caption ||
-    content.text ||
-    "";
+  const text = extractTextFromMessage(msg, content);
+  const isAudio = detectAudioMessage({ rawType, messageType, content, msg });
 
   return {
     instanceName,
@@ -311,6 +377,8 @@ const normalizeIncomingMessage = (instanceName, raw, webhookData) => {
     fromMe,
     isGroup,
     messageType,
+    rawType,
+    isAudio,
     timestamp: raw.messageTimestamp || Date.now(),
     raw,
   };
@@ -379,13 +447,23 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
     if (staticStatus !== "open") { console.log("⏭️ Ignorado: instancia no abierta, status:", staticStatus); continue; }
 
     // Audio Transcription logic
-    if (normalized.messageType === "audioMessage") {
+    if (normalized.isAudio) {
       console.log("🎙️ Procesando mensaje de audio...");
       const transcript = await processAudioMessage(instanceName, normalized.messageId);
       normalized.text = transcript;
       console.log("📝 Audio transcrito:", transcript);
     } else {
-      console.log("ℹ️ Tipo de mensaje:", normalized.messageType);
+      console.log("ℹ️ Tipo de mensaje:", normalized.rawType || normalized.messageType);
+    }
+
+    if (!hasProcessableText(normalized.text)) {
+      console.log("⏭️ Ignorado: mensaje sin contenido procesable", {
+        instanceName,
+        from: normalized.phoneNumber,
+        messageId: normalized.messageId,
+        messageType: normalized.rawType || normalized.messageType,
+      });
+      continue;
     }
 
     console.log("🧠 Ejecutando asistente IA para:", normalized.phoneNumber);
@@ -420,11 +498,14 @@ module.exports = {
   createInstanceWithQr,
   clearLatestQr,
   disconnectInstance,
+  extractIncomingMessages,
   getConnectionState,
   getLatestQr,
   getRecentMessages,
   getSafeConnectionState,
+  hasProcessableText,
   normalizeInstanceName,
+  normalizeIncomingMessage,
   normalizeQrPayload,
   processIncomingMessage,
   sendTextMessage,

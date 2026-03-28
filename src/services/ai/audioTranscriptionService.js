@@ -4,6 +4,10 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL || "http://localhost:8080";
 const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY || "";
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "";
+const AUDIO_TRANSCRIPTION_MODEL = process.env.AUDIO_TRANSCRIPTION_MODEL || "gemini-2.0-flash";
+const AUDIO_DOWNLOAD_ERROR = "[Error al descargar el audio]";
+const AUDIO_TRANSCRIPTION_FAILED = "[Audio recibido, pero falló la transcripción]";
+const AUDIO_TRANSCRIPTION_NOT_CONFIGURED = "[Audio recibido, pero la transcripción por IA no está configurada]";
 
 /**
  * Obtiene el base64 de un mensaje multimedia desde Evolution API
@@ -40,13 +44,17 @@ const getMediaBase64 = async (instanceName, messageId) => {
 const transcribeAudio = async (base64Data) => {
   if (!GOOGLE_API_KEY) {
     console.log("⚠️ No hay GOOGLE_API_KEY configurada para transcribir audios. Por favor, agregala en el archivo .env");
-    return "[Audio recibido, pero la transcripción por IA no está configurada]";
+    return AUDIO_TRANSCRIPTION_NOT_CONFIGURED;
+  }
+
+  if (!String(base64Data || "").trim()) {
+    return AUDIO_DOWNLOAD_ERROR;
   }
 
   try {
     const genAI = new GoogleGenerativeAI(GOOGLE_API_KEY);
-    // Usamos gemini-2.0-flash o superior que son rápidos y soportan audio nativamente
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
+    // Usamos un modelo rápido con soporte nativo de audio y configurable por entorno.
+    const model = genAI.getGenerativeModel({ model: AUDIO_TRANSCRIPTION_MODEL }); 
     
     const result = await model.generateContent([
       "Desgraba el siguiente audio con total precisión. No agregues comillas, comentarios ni aclaraciones. Solo quiero el texto de lo que se dijo:",
@@ -61,7 +69,7 @@ const transcribeAudio = async (base64Data) => {
     return result.response.text().trim();
   } catch (error) {
     console.error('❌ Error transcribiendo audio con Gemini:', error.message);
-    return "[Audio recibido, pero falló la transcripción]";
+    return AUDIO_TRANSCRIPTION_FAILED;
   }
 };
 
@@ -71,7 +79,7 @@ const transcribeAudio = async (base64Data) => {
 const processAudioMessage = async (instanceName, messageId) => {
   const base64 = await getMediaBase64(instanceName, messageId);
   if (!base64) {
-    return "[Error al descargar el audio]";
+    return AUDIO_DOWNLOAD_ERROR;
   }
 
   const transcript = await transcribeAudio(base64);
@@ -81,5 +89,8 @@ const processAudioMessage = async (instanceName, messageId) => {
 
 module.exports = {
   processAudioMessage,
-  transcribeAudio
+  transcribeAudio,
+  AUDIO_DOWNLOAD_ERROR,
+  AUDIO_TRANSCRIPTION_FAILED,
+  AUDIO_TRANSCRIPTION_NOT_CONFIGURED
 };

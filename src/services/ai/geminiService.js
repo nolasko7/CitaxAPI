@@ -189,6 +189,14 @@ const runWhatsappAssistant = async ({ instanceName, incomingMessage, companyCont
   const customerPhone =
     incomingMessage?.phoneNumber ||
     String(incomingMessage?.from || "").split("@")[0].split(":")[0].replace(/[^\d]/g, "").trim();
+  const messageText = String(incomingMessage?.text || "").trim();
+
+  if (!messageText) {
+    return {
+      enabled: false,
+      reason: "Mensaje sin contenido procesable.",
+    };
+  }
 
   let companyContext = providedContext;
   if (!companyContext) {
@@ -221,7 +229,7 @@ const runWhatsappAssistant = async ({ instanceName, incomingMessage, companyCont
     messages: [
       new SystemMessage(`${systemPrompt}\n\n${temporalRef}\n\n${contactRef}\n\n${phoneRef}`),
       ...history,
-      new HumanMessage(incomingMessage.text),
+      new HumanMessage(messageText),
     ],
   });
 
