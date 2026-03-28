@@ -1,6 +1,7 @@
 const prisma = require("../../config/prisma");
 
 const DEFAULT_TIMEZONE = "America/Argentina/Buenos_Aires";
+const SLOT_INTERVAL_MINUTES = 60;
 
 const getCurrentDateInTimeZone = (timezone = DEFAULT_TIMEZONE) => {
   return new Intl.DateTimeFormat("en-CA", {
@@ -257,7 +258,7 @@ const listAvailableSlots = async ({ companyId, professionalName, startDate, endD
             });
           }
 
-          slotStart = new Date(slotStart.getTime() + duration * 60000);
+          slotStart = new Date(slotStart.getTime() + SLOT_INTERVAL_MINUTES * 60000);
           if (slots.length >= limit) return slots;
         }
       }

@@ -5,6 +5,93 @@ const authMiddleware = require('../middlewares/auth.middleware');
 
 router.use(authMiddleware);
 
+const SLOT_INTERVAL_MINUTES = 60;
+
+const getCompanyAvailability = async (companyId) => {
+    const [rows] = await pool.execute(
+        'SELECT horarios_disponibilidad FROM EMPRESA WHERE id_empresa = ?',
+        [companyId]
+    );
+
+    if (rows.length === 0) return null;
+    return rows[0].horarios_disponibilidad;
+};
+
+const getPrestadorAvailability = async (companyId, prestadorId) => {
+    const [rows] = await pool.execute(
+        'SELECT horarios_disponibilidad FROM PRESTADOR WHERE id_prestador = ? AND id_empresa = ?',
+        [prestadorId, companyId]
+    );
+
+    if (rows.length === 0) {
+        return { exists: false, config: null };
+    }
+
+    return {
+        exists: true,
+        config: rows[0].horarios_disponibilidad,
+    };
+};
+
+const getPrestadorScope = async (req, prestadorIdFromQuery = null) => {
+    const companyId = req.user.id_empresa;
+    const companyConfig = await getCompanyAvailability(companyId);
+
+    if (companyConfig === null) {
+        return { error: { status: 404, message: 'Empresa no encontrada' } };
+    }
+
+    if (req.user.rol === 'prestador') {
+        const ownPrestadorId = Number(req.user.id_prestador);
+        if (!ownPrestadorId) {
+            return { error: { status: 403, message: 'No tenés un prestador asociado' } };
+        }
+
+        if (prestadorIdFromQuery && Number(prestadorIdFromQuery) !== ownPrestadorId) {
+            return { error: { status: 403, message: 'No podés consultar el horario de otro prestador' } };
+        }
+
+        const ownResult = await getPrestadorAvailability(companyId, ownPrestadorId);
+        if (!ownResult.exists) {
+            return { error: { status: 404, message: 'Prestador no encontrado' } };
+        }
+
+        return {
+            companyConfig,
+            prestadorId: ownPrestadorId,
+            effective: resolveEffectiveAvailability({ ownConfig: ownResult.config, companyConfig }),
+        };
+    }
+
+    if (!prestadorIdFromQuery) {
+        return {
+            companyConfig,
+            prestadorId: null,
+            effective: {
+                scope: 'empresa',
+                source: 'own',
+                config: toAvailabilityPayload(companyConfig),
+            },
+        };
+    }
+
+    const prestadorId = Number(prestadorIdFromQuery);
+    if (!prestadorId) {
+        return { error: { status: 400, message: 'prestador_id inválido' } };
+    }
+
+    const ownResult = await getPrestadorAvailability(companyId, prestadorId);
+    if (!ownResult.exists) {
+        return { error: { status: 404, message: 'Prestador no encontrado' } };
+    }
+
+    return {
+        companyConfig,
+        prestadorId,
+        effective: resolveEffectiveAvailability({ ownConfig: ownResult.config, companyConfig }),
+    };
+};
+
 router.get('/config', async (req, res) => {
     try {
         const [rows] = await pool.execute('SELECT horarios_disponibilidad FROM EMPRESA WHERE id_empresa = ?', [req.user.id_empresa]);
@@ -72,7 +159,7 @@ router.get('/', async (req, res) => {
                 });
 
                 if (!isTaken) slots.push(timeStr);
-                current.setMinutes(current.getMinutes() + 30);
+                current.setMinutes(current.getMinutes() + SLOT_INTERVAL_MINUTES);
             }
         });
 
