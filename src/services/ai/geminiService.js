@@ -160,8 +160,115 @@ const createTools = ({ companyContext, customerPhone }) => {
   ];
 };
 
+// ─── Native Gemini tool declarations (required for gemini-3.1-flash-lite-preview) ───
+const getGeminiToolDeclarations = () => {
+  return [
+    {
+      functionDeclarations: [
+        {
+          name: "get_company_context",
+          description: "Devuelve el contexto del negocio: prestadores, servicios y datos.",
+          parameters: {
+            type: "object",
+            properties: {},
+            required: [],
+          },
+        },
+        {
+          name: "find_available_slots",
+          description: "Busca horarios disponibles para un prestador en un rango de fechas.",
+          parameters: {
+            type: "object",
+            properties: {
+              professionalName: {
+                type: "string",
+                description: "Nombre del prestador.",
+              },
+              startDate: {
+                type: "string",
+                description: "Fecha desde en formato YYYY-MM-DD.",
+              },
+              endDate: {
+                type: "string",
+                description: "Fecha hasta en formato YYYY-MM-DD.",
+              },
+              limit: {
+                type: "number",
+                description: "Máximo de resultados (1-40).",
+              },
+            },
+            required: [],
+          },
+        },
+        {
+          name: "create_appointment",
+          description: "Crea un turno confirmado. Solo usar cuando el cliente ya confirmó.",
+          parameters: {
+            type: "object",
+            properties: {
+              clientName: {
+                type: "string",
+                description: "Nombre del cliente (mínimo 3 caracteres).",
+              },
+              professionalId: {
+                type: "number",
+                description: "ID del prestador.",
+              },
+              serviceId: {
+                type: "number",
+                description: "ID del servicio (si se omite se usa el primero disponible).",
+              },
+              date: {
+                type: "string",
+                description: "Fecha del turno (YYYY-MM-DD).",
+              },
+              time: {
+                type: "string",
+                description: "Hora de inicio (HH:mm).",
+              },
+            },
+            required: ["clientName", "professionalId", "date", "time"],
+          },
+        },
+        {
+          name: "get_appointments_by_day",
+          description: "Lista los turnos reservados para un día específico.",
+          parameters: {
+            type: "object",
+            properties: {
+              date: {
+                type: "string",
+                description: "Fecha a consultar en formato YYYY-MM-DD.",
+              },
+            },
+            required: [],
+          },
+        },
+        {
+          name: "cancel_appointment",
+          description: "Cancela un turno existente del cliente actual.",
+          parameters: {
+            type: "object",
+            properties: {
+              date: {
+                type: "string",
+                description: "Fecha del turno (YYYY-MM-DD).",
+              },
+              time: {
+                type: "string",
+                description: "Hora del turno (HH:mm).",
+              },
+            },
+            required: [],
+          },
+        },
+      ],
+    },
+  ];
+};
+
 const createGraph = (tools) => {
-  const modelWithTools = createModel().bindTools(tools);
+  const modelWithTools = createModel().bindTools(getGeminiToolDeclarations());
   const toolNode = new ToolNode(tools);
 
   const callModel = async (state) => {
