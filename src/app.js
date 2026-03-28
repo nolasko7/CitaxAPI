@@ -26,8 +26,11 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Health check
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/health', (req, res) => res.json({
+    status: 'ok',
+    version: process.env.APP_VERSION || 'local',
+    model: process.env.GEMINI_MODEL || 'not set',
+}));
 
 // Routes
 app.use('/api/auth', authRoutes);
