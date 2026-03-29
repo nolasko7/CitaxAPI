@@ -202,7 +202,7 @@ router.put('/config', async (req, res) => {
 
 router.get('/', async (req, res) => {
     const prestadorIdFromQuery = req.query.prestador_id || null;
-    const { fecha } = req.query;
+    const { fecha, servicio_id, empresa_id } = req.query;
 
     if (!fecha) {
         return res.status(400).json({ error: 'Falta el parámetro fecha' });
@@ -219,41 +219,76 @@ router.get('/', async (req, res) => {
         }
 
         const configMap = buildAvailabilityMap(scope.effective.config);
-        const jsDay = new Date(fecha).getDay();
+
+        // Parsear la fecha en UTC para evitar desfases por zona horaria del servidor
+        const [year, month, day] = fecha.split('-').map(Number);
+        const fechaUTC = new Date(Date.UTC(year, month - 1, day));
+        const jsDay = fechaUTC.getUTCDay(); // 0=dom,1=lun...6=sab
         const dayMap = [7, 1, 2, 3, 4, 5, 6];
         const targetDay = dayMap[jsDay];
         const dayConfig = configMap[targetDay] || [];
 
+        // Si la empresa no trabaja ese día, devolver vacío directamente
         if (!dayConfig.length) {
             return res.json({ slots: [] });
+        }
+
+        // Obtener duración real del servicio si se indicó
+        let duracionMinutos = 30;
+        if (servicio_id) {
+            const companyId = empresa_id || req.user.id_empresa;
+            const [svcRows] = await pool.execute(
+                'SELECT duracion_minutos FROM SERVICIO WHERE id_servicio = ? AND id_empresa = ?',
+                [Number(servicio_id), Number(companyId)]
+            );
+            if (svcRows.length > 0) {
+                duracionMinutos = svcRows[0].duracion_minutos || 30;
+            }
         }
 
         const dayStart = `${fecha} 00:00:00`;
         const dayEnd = `${fecha} 23:59:59`;
         const [turnos] = await pool.execute(
-            'SELECT fecha_hora FROM TURNO WHERE id_prestador = ? AND fecha_hora BETWEEN ? AND ? AND estado != "cancelado"',
+            `SELECT t.fecha_hora, COALESCE(s.duracion_minutos, 30) AS duracion_minutos
+             FROM TURNO t
+             LEFT JOIN SERVICIO s ON t.id_servicio = s.id_servicio
+             WHERE t.id_prestador = ? AND t.fecha_hora BETWEEN ? AND ? AND t.estado != "cancelado"`,
             [scope.prestadorId, dayStart, dayEnd]
         );
 
         const slots = [];
+        const now = new Date();
+
         for (const range of dayConfig) {
-            let current = new Date(`${fecha}T${range.start}`);
-            const end = new Date(`${fecha}T${range.end}`);
+            // Forzar UTC para que los horarios configurados se respeten tal cual
+            let current = new Date(`${fecha}T${range.start}:00Z`);
+            const end = new Date(`${fecha}T${range.end}:00Z`);
 
             while (current < end) {
-                const hh = String(current.getHours()).padStart(2, '0');
-                const mm = String(current.getMinutes()).padStart(2, '0');
+                const slotEnd = new Date(current.getTime() + duracionMinutos * 60000);
+
+                // El slot tiene que caber completo dentro del rango
+                if (slotEnd > end) break;
+
+                // No mostrar slots pasados
+                if (current <= now) {
+                    current = new Date(current.getTime() + duracionMinutos * 60000);
+                    continue;
+                }
+
+                const hh = String(current.getUTCHours()).padStart(2, '0');
+                const mm = String(current.getUTCMinutes()).padStart(2, '0');
                 const timeStr = `${hh}:${mm}`;
 
+                // Verificar solapamiento real con turnos existentes
                 const isTaken = turnos.some((t) => {
-                    const rowDate = new Date(t.fecha_hora);
-                    const rowHH = String(rowDate.getHours()).padStart(2, '0');
-                    const rowMM = String(rowDate.getMinutes()).padStart(2, '0');
-                    return `${rowHH}:${rowMM}` === timeStr;
+                    const tStart = new Date(t.fecha_hora);
+                    const tEnd = new Date(tStart.getTime() + t.duracion_minutos * 60000);
+                    return current < tEnd && slotEnd > tStart;
                 });
 
                 if (!isTaken) slots.push(timeStr);
-                current.setMinutes(current.getMinutes() + 30);
+                current = new Date(current.getTime() + duracionMinutos * 60000);
             }
         }
 

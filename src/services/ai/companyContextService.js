@@ -154,6 +154,23 @@ const getCompanyContextByInstanceName = async (instanceName, customerPhone = nul
     }
   }
 
+  // Leer bot_config para determinar el modo primera persona
+  const botConfig = (() => {
+    try {
+      const raw = empresa.bot_config;
+      if (!raw) return {};
+      return typeof raw === "string" ? JSON.parse(raw) : raw;
+    } catch (_) {
+      return {};
+    }
+  })();
+
+  // Primera persona: solo aplica si está habilitado Y hay exactamente 1 prestador activo
+  const primerPersonaActiva = botConfig.primera_persona === true && professionals.length === 1;
+  const personaName = primerPersonaActiva
+    ? professionals[0].name
+    : professionals[0]?.name || empresa.nombre_comercial;
+
   return {
     companyId: empresa.id_empresa,
     companyName: empresa.nombre_comercial,
@@ -168,7 +185,8 @@ const getCompanyContextByInstanceName = async (instanceName, customerPhone = nul
     services,
     horarios,
     customerPendingAppointments,
-    assistantPersonaName: professionals[0]?.name || empresa.nombre_comercial,
+    assistantPersonaName: personaName,
+    primerPersonaActiva,
   };
 };
 

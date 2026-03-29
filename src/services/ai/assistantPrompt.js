@@ -11,6 +11,7 @@ const buildAssistantPrompt = (companyContext) => {
     assistantPersonaName = "Asistente",
     currentDate = new Date().toLocaleDateString("es-AR"),
     timezone = "America/Argentina/Buenos_Aires",
+    primerPersonaActiva = false,
   } = companyContext || {};
 
   const personaName = assistantPersonaName;
@@ -19,11 +20,24 @@ const buildAssistantPrompt = (companyContext) => {
     ? professionals
         .map((p) => {
           const svcStr = p.services?.length
-            ? p.services.map((s) => `${s.name} ($${s.price}, ${s.duration}min)`).join(", ")
+            ? p.services.map((s) => `${s.name} (${s.price}, ${s.duration}min)`).join(", ")
             : "sin servicios configurados";
-          return `- ${p.name} (ID: ${p.id}) → servicios: ${svcStr}`;
+
+          // Construir bloque de horarios del prestador
+          const availConfig = p.availability?.config?.config || [];
+          const DAY_NAMES = ["", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
+          const horarioStr = availConfig.length
+            ? availConfig
+                .map((h) => `    ${DAY_NAMES[h.dia_semana] || `Día ${h.dia_semana}`}: ${h.hora_desde}–${h.hora_hasta}`)
+                .join("\n")
+            : "    Sin horario configurado";
+          const horarioSource = p.usesFallbackAvailability
+            ? "(usa horario general de la empresa)"
+            : "(horario propio)";
+
+          return `- ${p.name} (ID: ${p.id})\n  Servicios: ${svcStr}\n  Horarios ${horarioSource}:\n${horarioStr}`;
         })
-        .join("\n")
+        .join("\n\n")
     : "No hay prestadores configurados aún.";
 
   const svcList = services.length
@@ -94,6 +108,12 @@ REGLAS OPERATIVAS:
 CUÁNDO USAR HERRAMIENTAS:
 - Usá find_available_slots para buscar disponibilidad real según servicio, prestador y rango de fechas.
 - Usá create_appointment solamente cuando ya tengas todos los datos y el cliente haya confirmado. Si ya conocés el servicio elegido, pasalo explícitamente en la herramienta.
+
+REGLAS CRÍTICAS SOBRE HORARIOS DE PRESTADORES:
+- Cada prestador tiene SU PROPIO horario listado en PRESTADORES DISPONIBLES. Los horarios de un prestador NO aplican a otro.
+- NUNCA ofrezcas un horario de un prestador para otro prestador diferente.
+- Si el cliente no especificó prestador y hay más de uno, buscá disponibilidad usando find_available_slots (que considera el prestador correcto automáticamente).
+- Antes de mencionar cualquier horario, verificá mentalmente: ¿este horario corresponde al prestador que el cliente eligió? Si no estás seguro, consultá con find_available_slots.
 
 FORMATO DE RESPUESTA:
 - En tu PRIMER mensaje de saludo al cliente, debés responder SIEMPRE con esta frase exacta: "Hola, como estas amigaso, queres reservar un turno para hoy?".

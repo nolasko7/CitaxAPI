@@ -51,9 +51,8 @@ router.put('/bot', async (req, res) => {
             rubro: String(payload.rubro || "").slice(0, 100).trim(),
             mensaje_bienvenida: String(payload.mensaje_bienvenida || "").slice(0, 200).trim(),
             palabras_propias: String(payload.palabras_propias || "").slice(0, 500).trim(),
+            primera_persona: payload.primera_persona === true,
         };
-
-        // TODO: Restaurar validator_gemini si es necesario, ahora asumimos que es seguro (está sanitizado).
         
         await pool.execute(
             'UPDATE EMPRESA SET bot_config = ? WHERE id_empresa = ?', 
