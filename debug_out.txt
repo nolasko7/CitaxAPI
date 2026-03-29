@@ -36,3 +36,7 @@ constructor() {
 }
 
 Node.js v22.17.0
+📡 [5:11:38 PM] OPTIONS /api/appointments - Origin: http://localhost:5173
+📡 [5:11:38 PM] OPTIONS /api/appointments - Origin: http://localhost:5173
+📡 [5:11:38 PM] GET /api/appointments - Origin: http://localhost:5173
+📡 [5:11:38 PM] GET /api/appointments - Origin: http://localhost:5173
