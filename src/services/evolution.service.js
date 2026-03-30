@@ -7,6 +7,9 @@ const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY || "429683C4C977415CAAFC
 const EVOLUTION_WEBHOOK_ENABLED = (process.env.EVOLUTION_WEBHOOK_ENABLED || "true") === "true";
 const BACKEND_PUBLIC_URL = process.env.BACKEND_PUBLIC_URL || "";
 const WHATSAPP_INSTANCE_PREFIX = process.env.WHATSAPP_INSTANCE_PREFIX || "citax";
+const SUPPORT_INSTANCE_NAME = String(process.env.SUPPORT_WHATSAPP_INSTANCE || "citax-support-whatsapp")
+  .trim()
+  .toLowerCase();
 
 const evolutionClient = axios.create({
   baseURL: EVOLUTION_API_URL,
@@ -400,7 +403,7 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
   }
 
   // Lazy-load AI to avoid circular deps at startup
-  const { runWhatsappAssistant } = require("./ai/geminiService");
+  const { runSupportAssistant, runWhatsappAssistant } = require("./ai/geminiService");
 
   for (const message of messages) {
     const normalized = normalizeIncomingMessage(instanceName, message, webhookData);
@@ -448,10 +451,12 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
     console.log("🧠 Ejecutando asistente IA para:", normalized.phoneNumber);
 
     try {
-      const aiResponse = await runWhatsappAssistant({
-        instanceName,
-        incomingMessage: normalized,
-      });
+      const aiResponse = normalizeInstanceName(instanceName) === normalizeInstanceName(SUPPORT_INSTANCE_NAME)
+        ? await runSupportAssistant({ incomingMessage: normalized })
+        : await runWhatsappAssistant({
+            instanceName,
+            incomingMessage: normalized,
+          });
 
       console.log("🤖 Resultado IA:", {
         enabled: aiResponse?.enabled,

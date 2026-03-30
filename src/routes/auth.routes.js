@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require('../config/db');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const { authenticateCompanyUser } = require('../services/authCompany.service');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key-citax';
 
@@ -17,53 +18,21 @@ function toSlug(text) {
 router.post('/login', async (req, res) => {
     const { email, password } = req.body;
     try {
-        const [rows] = await pool.execute('SELECT * FROM USUARIO WHERE email = ?', [email]);
-        const user = rows[0];
-
-        if (!user) return res.status(401).json({ error: 'Credenciales inválidas' });
-
-        const isMatch = await bcrypt.compare(password, user.password_hash);
-        if (!isMatch && password !== user.password_hash) {
-            return res.status(401).json({ error: 'Credenciales inválidas' });
-        }
-
-        const [empresaRows] = await pool.execute('SELECT * FROM EMPRESA WHERE id_usuario = ?', [user.id_usuario]);
-        const empresa = empresaRows[0];
-
-        // If user is a prestador, look up their PRESTADOR record + parent EMPRESA
-        let prestadorData = null;
-        if (user.rol === 'prestador') {
-            const [prestRows] = await pool.execute(
-                `SELECT p.id_prestador, p.id_empresa, e.nombre_comercial, e.slug
-                 FROM PRESTADOR p
-                 JOIN EMPRESA e ON p.id_empresa = e.id_empresa
-                 WHERE p.id_usuario = ?`,
-                [user.id_usuario]
-            );
-            prestadorData = prestRows[0];
-        }
+        const authResult = await authenticateCompanyUser({ email, password });
+        if (!authResult) return res.status(401).json({ error: 'Credenciales inválidas' });
+        const { user: resolvedUser } = authResult;
         
         const token = jwt.sign({
-            id_usuario: user.id_usuario,
-            email: user.email,
-            id_empresa: empresa?.id_empresa || prestadorData?.id_empresa || null,
-            id_prestador: prestadorData?.id_prestador || null,
-            rol: user.rol
+            id_usuario: resolvedUser.id,
+            email: resolvedUser.email,
+            id_empresa: resolvedUser.empresa_id,
+            id_prestador: resolvedUser.id_prestador,
+            rol: resolvedUser.rol
         }, JWT_SECRET, { expiresIn: '30d' });
 
         res.json({
             token,
-            user: {
-                id: user.id_usuario,
-                email: user.email,
-                nombre: user.nombre,
-                apellido: user.apellido,
-                rol: user.rol,
-                id_prestador: prestadorData?.id_prestador || null,
-                empresa_id: empresa?.id_empresa || prestadorData?.id_empresa || null,
-                nombre_comercial: empresa?.nombre_comercial || prestadorData?.nombre_comercial || null,
-                slug: empresa?.slug || prestadorData?.slug || null
-            }
+            user: resolvedUser
         });
     } catch (err) {
         console.error(err);

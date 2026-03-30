@@ -7,6 +7,7 @@ const configRoutes = require('./routes/config.routes');
 const servicesRoutes = require('./routes/services.routes');
 const professionalsRoutes = require('./routes/professionals.routes');
 const whatsappRoutes = require('./routes/whatsapp.routes');
+const superadminRoutes = require('./routes/superadmin.routes');
 
 const app = express();
 
@@ -40,6 +41,7 @@ app.use('/api/config', configRoutes);
 app.use('/api/services', servicesRoutes);
 app.use('/api/professionals', professionalsRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
+app.use('/api/superadmin', superadminRoutes);
 app.post('/api/webhook', require('./controllers/whatsapp.controller').handleWebhook);
 
 // Error handler

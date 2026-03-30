@@ -508,8 +508,111 @@ const listAppointmentsByDay = async ({ companyId, date, referenceDate }) => {
   }));
 };
 
+// ─── Cancel appointment by company slot (support bot) ─────────────────
+const cancelAppointmentByCompanyFromAssistant = async ({
+  companyId,
+  date,
+  time,
+  referenceDate,
+  professionalName,
+  clientName,
+}) => {
+  const normalizedDate = date ? normalizeDate(date, referenceDate) : null;
+  const normalizedTime = time ? formatTime(time) : null;
+
+  const where = {
+    estado: { in: ["pendiente", "confirmado"] },
+    PRESTADOR: { id_empresa: companyId },
+  };
+
+  if (normalizedDate) {
+    where.fecha_hora = {
+      gte: new Date(`${normalizedDate}T00:00:00Z`),
+      lte: new Date(`${normalizedDate}T23:59:59Z`),
+    };
+  } else {
+    where.fecha_hora = { gte: getNowInTimezone() };
+  }
+
+  const appointments = await prisma.tURNO.findMany({
+    where,
+    include: {
+      SERVICIO: true,
+      PRESTADOR: { include: { USUARIO: true } },
+      CLIENTE: true,
+    },
+    orderBy: { fecha_hora: "asc" },
+  });
+
+  let filtered = appointments;
+  if (normalizedTime) {
+    filtered = filtered.filter((a) => {
+      const t = `${pad(a.fecha_hora.getUTCHours())}:${pad(a.fecha_hora.getUTCMinutes())}`;
+      return t === normalizedTime;
+    });
+  }
+
+  if (professionalName) {
+    const needle = String(professionalName).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    filtered = filtered.filter((a) => {
+      const fullName = `${a.PRESTADOR?.USUARIO?.nombre || ""} ${a.PRESTADOR?.USUARIO?.apellido || ""}`
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+      return fullName.includes(needle);
+    });
+  }
+
+  if (clientName) {
+    const needle = String(clientName).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    filtered = filtered.filter((a) => {
+      const fullName = String(a.CLIENTE?.nombre_wa || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+      return fullName.includes(needle);
+    });
+  }
+
+  if (!filtered.length) {
+    throw new Error("No encontré ningún turno activo con esos datos para cancelar.");
+  }
+
+  if (filtered.length > 1 && (!normalizedDate || !normalizedTime)) {
+    return {
+      status: "multiple_found",
+      appointments: filtered.slice(0, 8).map((a) => ({
+        id: a.id_turno,
+        date: a.fecha_hora.toISOString().slice(0, 10),
+        time: `${pad(a.fecha_hora.getUTCHours())}:${pad(a.fecha_hora.getUTCMinutes())}`,
+        professional: `${a.PRESTADOR?.USUARIO?.nombre || ""} ${a.PRESTADOR?.USUARIO?.apellido || ""}`.trim(),
+        client: a.CLIENTE?.nombre_wa || "Sin nombre",
+      })),
+    };
+  }
+
+  const appointment = filtered[0];
+  await prisma.tURNO.update({
+    where: { id_turno: appointment.id_turno },
+    data: { estado: "cancelado" },
+  });
+
+  return {
+    status: "cancelled",
+    appointmentId: appointment.id_turno,
+    date: appointment.fecha_hora.toISOString().slice(0, 10),
+    time: `${pad(appointment.fecha_hora.getUTCHours())}:${pad(appointment.fecha_hora.getUTCMinutes())}`,
+    professional: `${appointment.PRESTADOR?.USUARIO?.nombre || ""} ${appointment.PRESTADOR?.USUARIO?.apellido || ""}`.trim(),
+    client: appointment.CLIENTE?.nombre_wa || "Sin nombre",
+    clientPhone: normalizePhone(appointment.CLIENTE?.whatsapp_id || ""),
+    service: appointment.SERVICIO?.nombre || "Turno",
+    askNotifyMati: true,
+  };
+};
+
 module.exports = {
   cancelAppointmentFromAssistant,
+  cancelAppointmentByCompanyFromAssistant,
   createAppointmentFromAssistant,
   getCompanyContextByInstanceName,
   listAvailableSlots,
