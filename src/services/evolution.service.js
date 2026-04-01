@@ -1,10 +1,12 @@
 const axios = require("axios");
 const { processAudioMessage } = require("./ai/audioTranscriptionGroqService");
 const pool = require("../config/db");
+const {
+  getEvolutionApiConfig,
+  getEvolutionRequestHeaders,
+} = require("./evolutionConfig.service");
 
-
-const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL || "http://localhost:8080";
-const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY || "429683C4C977415CAAFCCE10F7D57E11";
+const { baseUrl: EVOLUTION_API_URL, apiKey: EVOLUTION_API_KEY } = getEvolutionApiConfig();
 const EVOLUTION_WEBHOOK_ENABLED = (process.env.EVOLUTION_WEBHOOK_ENABLED || "true") === "true";
 const BACKEND_PUBLIC_URL = process.env.BACKEND_PUBLIC_URL || "";
 const WHATSAPP_INSTANCE_PREFIX = process.env.WHATSAPP_INSTANCE_PREFIX || "citax";
@@ -62,10 +64,7 @@ const getIgnoredPhonesForInstance = async (instanceName) => {
 
 const evolutionClient = axios.create({
   baseURL: EVOLUTION_API_URL,
-  headers: {
-    "Content-Type": "application/json",
-    apikey: EVOLUTION_API_KEY,
-  },
+  headers: getEvolutionRequestHeaders(),
   timeout: 15000,
 });
 

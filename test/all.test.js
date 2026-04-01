@@ -1,4 +1,5 @@
 require("./evolution.service.test");
+require("./evolutionConfig.service.test");
 require("./assistantPrompt.test");
 require("./geminiService.test");
 require("./slotPresentation.test");

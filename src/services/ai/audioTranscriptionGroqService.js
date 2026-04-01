@@ -1,7 +1,10 @@
 const axios = require("axios");
+const {
+  getEvolutionApiConfig,
+  getEvolutionRequestHeaders,
+} = require("../evolutionConfig.service");
 
-const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL || "http://localhost:8080";
-const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY || "";
+const { baseUrl: EVOLUTION_API_URL, usingDefaultApiKey } = getEvolutionApiConfig();
 const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
 const GROQ_AUDIO_MODEL = process.env.GROQ_AUDIO_MODEL || "whisper-large-v3";
 const AUDIO_DOWNLOAD_ERROR = "[Error al descargar el audio]";
@@ -11,6 +14,12 @@ const AUDIO_TRANSCRIPTION_NOT_CONFIGURED =
 
 const getMediaBase64 = async (instanceName, messageId) => {
   try {
+    if (usingDefaultApiKey) {
+      console.warn(
+        "Audio transcription is using the default Evolution API key fallback. Check EVOLUTION_API_KEY in production."
+      );
+    }
+
     const response = await axios.post(
       `${EVOLUTION_API_URL.replace(/\/$/, "")}/chat/getBase64FromMediaMessage/${instanceName}`,
       {
@@ -21,10 +30,7 @@ const getMediaBase64 = async (instanceName, messageId) => {
         },
       },
       {
-        headers: {
-          "Content-Type": "application/json",
-          apikey: EVOLUTION_API_KEY,
-        },
+        headers: getEvolutionRequestHeaders(),
       }
     );
 
