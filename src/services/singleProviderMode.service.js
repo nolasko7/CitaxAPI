@@ -5,6 +5,72 @@ const toTrimmedString = (value, maxLength) =>
     .slice(0, maxLength)
     .trim();
 
+const OWN_PHRASE_LIMITS = {
+  general: 500,
+  saludos: 300,
+  confirmaciones: 300,
+  cierres: 300,
+};
+
+const sanitizeOwnPhraseSection = (value, key) =>
+  toTrimmedString(value, OWN_PHRASE_LIMITS[key] || 300);
+
+const normalizeOwnPhrasesConfig = (value) => {
+  if (typeof value === "string") {
+    return {
+      general: sanitizeOwnPhraseSection(value, "general"),
+      saludos: "",
+      confirmaciones: "",
+      cierres: "",
+    };
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      general: "",
+      saludos: "",
+      confirmaciones: "",
+      cierres: "",
+    };
+  }
+
+  return {
+    general: sanitizeOwnPhraseSection(value.general, "general"),
+    saludos: sanitizeOwnPhraseSection(value.saludos, "saludos"),
+    confirmaciones: sanitizeOwnPhraseSection(
+      value.confirmaciones,
+      "confirmaciones",
+    ),
+    cierres: sanitizeOwnPhraseSection(value.cierres, "cierres"),
+  };
+};
+
+const sanitizeOwnPhrasesPayload = (payload = {}, currentValue = {}) => {
+  const current = normalizeOwnPhrasesConfig(currentValue);
+  const incoming = normalizeOwnPhrasesConfig(payload.palabras_propias);
+
+  return {
+    general: sanitizeOwnPhraseSection(
+      payload.palabras_propias_general ?? incoming.general ?? current.general,
+      "general",
+    ),
+    saludos: sanitizeOwnPhraseSection(
+      payload.palabras_propias_saludos ?? incoming.saludos ?? current.saludos,
+      "saludos",
+    ),
+    confirmaciones: sanitizeOwnPhraseSection(
+      payload.palabras_propias_confirmaciones ??
+        incoming.confirmaciones ??
+        current.confirmaciones,
+      "confirmaciones",
+    ),
+    cierres: sanitizeOwnPhraseSection(
+      payload.palabras_propias_cierres ?? incoming.cierres ?? current.cierres,
+      "cierres",
+    ),
+  };
+};
+
 const sanitizeIgnoredPhones = (value) => {
   const rawItems = Array.isArray(value)
     ? value
@@ -26,13 +92,27 @@ const parseBotConfig = (raw) => {
   if (typeof raw === "string") {
     try {
       const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return {};
+      }
+
+      return {
+        ...parsed,
+        palabras_propias: normalizeOwnPhrasesConfig(parsed.palabras_propias),
+      };
     } catch (_) {
       return {};
     }
   }
 
-  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {};
+  }
+
+  return {
+    ...raw,
+    palabras_propias: normalizeOwnPhrasesConfig(raw.palabras_propias),
+  };
 };
 
 const isSingleProviderModeEnabledForConfig = (config) =>
@@ -64,7 +144,7 @@ const sanitizeBotConfig = (payload = {}, currentConfig = {}) => {
     tono: toTrimmedString(payload.tono, 100),
     rubro: toTrimmedString(payload.rubro, 100),
     mensaje_bienvenida: toTrimmedString(payload.mensaje_bienvenida, 200),
-    palabras_propias: toTrimmedString(payload.palabras_propias, 500),
+    palabras_propias: sanitizeOwnPhrasesPayload(payload, base.palabras_propias),
     telefonos_ignorados: sanitizeIgnoredPhones(payload.telefonos_ignorados ?? base.telefonos_ignorados),
     primera_persona: singleProviderMode || payload.primera_persona === true,
     cuenta_prestador_unico: singleProviderMode,
@@ -174,6 +254,7 @@ module.exports = {
   getSingleProviderModeActivationStatus,
   isSingleProviderModeEnabled,
   isSingleProviderModeEnabledForConfig,
+  normalizeOwnPhrasesConfig,
   parseBotConfig,
   sanitizeBotConfig,
 };

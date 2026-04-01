@@ -545,8 +545,41 @@ const normalizeAssistantText = (value) =>
     .replace(/\s+/g, " ")
     .trim();
 
-const getConfiguredWelcomeMessage = (companyContext = {}) =>
-  String(companyContext?.welcomeMessage || "").trim() || DEFAULT_WELCOME_MESSAGE;
+const renderWelcomeMessageTemplate = ({
+  template = "",
+  contactName = "",
+}) => {
+  const rendered = String(template || "")
+    .trim()
+    .replace(/\{nombre_cliente\}/gi, String(contactName || "").trim())
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[,.;:!?-]+\s*/g, "")
+    .trim();
+
+  return rendered;
+};
+
+const getConfiguredWelcomeMessage = (
+  companyContext = {},
+  contactName = "",
+) => {
+  const configuredMessage = renderWelcomeMessageTemplate({
+    template: companyContext?.welcomeMessage,
+    contactName,
+  });
+
+  if (configuredMessage) {
+    return configuredMessage;
+  }
+
+  return (
+    renderWelcomeMessageTemplate({
+      template: DEFAULT_WELCOME_MESSAGE,
+      contactName,
+    }) || DEFAULT_WELCOME_MESSAGE
+  );
+};
 
 const isGreetingOnlyMessage = (value) => {
   const normalized = normalizeAssistantText(value);
@@ -1639,15 +1672,16 @@ const runWhatsappAssistant = async ({
     };
   }
 
+  const preferredName = resolvePreferredContactName(incomingMessage?.pushName);
+  const welcomeReply = getConfiguredWelcomeMessage(companyContext, preferredName);
   const tools = createTools({ companyContext, customerPhone });
   const realtimeContext = buildRealtimeTemporalContext(companyContext.timezone);
   const systemPrompt = buildAssistantPrompt({
     ...companyContext,
+    welcomeMessage: welcomeReply,
     currentDate: realtimeContext.localDate,
     currentTime: realtimeContext.localTime,
   });
-
-  const preferredName = resolvePreferredContactName(incomingMessage?.pushName);
   const temporalRef = `Referencia temporal obligatoria: fecha local actual ${realtimeContext.localDate}, hora local ${realtimeContext.localTime}, zona ${realtimeContext.timezone}, timestamp UTC ${realtimeContext.isoUtc}. UsÃ¡ esta referencia como fuente de verdad para interpretar "hoy", "maÃ±ana" y fechas relativas.`;
   const contactRef = preferredName
     ? `Este cliente figura como '${preferredName}' en WhatsApp.`
@@ -1664,7 +1698,6 @@ const runWhatsappAssistant = async ({
     };
   }
 
-  const welcomeReply = getConfiguredWelcomeMessage(companyContext);
   if (
     shouldUseConfiguredWelcomeReply({
       history,

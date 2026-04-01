@@ -1,6 +1,24 @@
 const DEFAULT_WELCOME_MESSAGE =
   "Hola, como estas amigaso, queres reservar un turno para hoy?";
 
+const normalizeOwnPhrases = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      general: String(value || "").trim(),
+      saludos: "",
+      confirmaciones: "",
+      cierres: "",
+    };
+  }
+
+  return {
+    general: String(value.general || "").trim(),
+    saludos: String(value.saludos || "").trim(),
+    confirmaciones: String(value.confirmaciones || "").trim(),
+    cierres: String(value.cierres || "").trim(),
+  };
+};
+
 const buildAssistantPrompt = (companyContext) => {
   const {
     companyName = "la empresa",
@@ -12,11 +30,28 @@ const buildAssistantPrompt = (companyContext) => {
     timezone = "America/Argentina/Buenos_Aires",
     singleProviderMode = false,
     welcomeMessage = "",
+    ownPhrases = "",
   } = companyContext || {};
 
   const personaName = assistantPersonaName;
   const resolvedWelcomeMessage =
     String(welcomeMessage || "").trim() || DEFAULT_WELCOME_MESSAGE;
+  const resolvedOwnPhrases = normalizeOwnPhrases(ownPhrases);
+  const ownPhrasesBlocks = [
+    resolvedOwnPhrases.general
+      ? `- Generales: ${resolvedOwnPhrases.general}`
+      : null,
+    resolvedOwnPhrases.saludos
+      ? `- Para saludos y aperturas: ${resolvedOwnPhrases.saludos}`
+      : null,
+    resolvedOwnPhrases.confirmaciones
+      ? `- Para confirmaciones: ${resolvedOwnPhrases.confirmaciones}`
+      : null,
+    resolvedOwnPhrases.cierres
+      ? `- Para cierres: ${resolvedOwnPhrases.cierres}`
+      : null,
+  ].filter(Boolean);
+  const hasOwnPhrases = ownPhrasesBlocks.length > 0;
 
   const profList = professionals.length
     ? professionals
@@ -59,6 +94,11 @@ PERSONA Y TONO:
 - Nunca digas que sos una IA, bot, modelo o asistente automatico salvo que el cliente lo pregunte explicitamente.
 - Mantene mensajes cortos, humanos y directos, estilo WhatsApp.
 - Usa tono argentino cercano; podes usar expresiones como "amigaso" de forma ocasional y natural, sin exagerar.
+${hasOwnPhrases ? `- Palabras y frases propias del negocio:
+${ownPhrasesBlocks.join("\n")}
+- Usa esas palabras y frases como guia de estilo cuando encajen de forma natural, especialmente en saludos, respuestas cortas, confirmaciones y cierres.
+- No fuerces todas las palabras propias en el mismo mensaje. Elegi solo las que realmente suenen naturales para ese contexto.
+- Si una palabra propia aplica a saludos, podes usarla en saludos o aperturas siempre que no contradiga un mensaje especial de bienvenida configurado.` : ""}
 
 OBJETIVO PRINCIPAL:
 - Guiar al cliente para reservar un turno.
@@ -138,6 +178,8 @@ Negocio: ${companyName}
 Fecha actual: ${currentDate}
 Zona horaria: ${timezone}
 Modo prestador unico: ${singleProviderMode ? "si" : "no"}
+Palabras propias:
+${hasOwnPhrases ? ownPhrasesBlocks.join("\n") : "- Sin palabras propias configuradas."}
 
 PRESTADORES DISPONIBLES:
 ${profList}

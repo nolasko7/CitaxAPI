@@ -7,6 +7,7 @@ const {
 const {
   getCompanyBotConfig,
   isSingleProviderModeEnabledForConfig,
+  normalizeOwnPhrasesConfig,
 } = require("../singleProviderMode.service");
 
 const DEFAULT_TIMEZONE = "America/Argentina/Buenos_Aires";
@@ -196,6 +197,7 @@ const getCompanyContextByInstanceName = async (instanceName, customerPhone = nul
     customerPendingAppointments,
     assistantPersonaName: personaName,
     welcomeMessage: String(botConfig?.mensaje_bienvenida || "").trim(),
+    ownPhrases: normalizeOwnPhrasesConfig(botConfig?.palabras_propias),
     singleProviderMode,
     primerPersonaActiva,
   };

@@ -287,12 +287,24 @@ test("stringifyMessageContent preserves plain user text", () => {
   }
 });
 
-test("getConfiguredWelcomeMessage prefers configured greeting and falls back to default", () => {
+test("getConfiguredWelcomeMessage renders {nombre_cliente} and falls back to default", () => {
   const { service, restore } = loadServiceWithEnv({
     GROQ_API_KEY: "groq-test-key",
   });
 
   try {
+    assert.equal(
+      service.__testables.getConfiguredWelcomeMessage({
+        welcomeMessage: "Hola {nombre_cliente}, como estas, queres reservar un turno?",
+      }, "Valentin"),
+      "Hola Valentin, como estas, queres reservar un turno?",
+    );
+    assert.equal(
+      service.__testables.getConfiguredWelcomeMessage({
+        welcomeMessage: "Hola {nombre_cliente}, como estas, queres reservar un turno?",
+      }),
+      "Hola, como estas, queres reservar un turno?",
+    );
     assert.equal(
       service.__testables.getConfiguredWelcomeMessage({
         welcomeMessage: "Buenas, soy Sergio. Decime si queres reservar.",
