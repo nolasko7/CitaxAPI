@@ -1,10 +1,11 @@
-const axios = require('axios');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const axios = require("axios");
 
 const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL || "http://localhost:8080";
 const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY || "";
-const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "";
-const AUDIO_TRANSCRIPTION_MODEL = process.env.AUDIO_TRANSCRIPTION_MODEL || process.env.GEMINI_MODEL || "gemini-3.1-flash-lite-preview";
+const OLLAMA_API_KEY = process.env.OLLAMA_API_KEY || "";
+const OLLAMA_API_URL = process.env.OLLAMA_API_URL || "http://localhost:11434/api";
+const AUDIO_TRANSCRIPTION_MODEL =
+  process.env.AUDIO_TRANSCRIPTION_MODEL || process.env.OLLAMA_MODEL || "llama3.2";
 const AUDIO_DOWNLOAD_ERROR = "[Error al descargar el audio]";
 const AUDIO_TRANSCRIPTION_FAILED = "[Audio recibido, pero falló la transcripción]";
 const AUDIO_TRANSCRIPTION_NOT_CONFIGURED = "[Audio recibido, pero la transcripción por IA no está configurada]";

@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { processAudioMessage } = require("./ai/audioTranscriptionService");
+const { processAudioMessage } = require("./ai/audioTranscriptionGroqService");
 
 
 const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL || "http://localhost:8080";
@@ -354,9 +354,21 @@ const hasProcessableText = (value) => {
     "[audio recibido, pero falló la transcripción]",
     "[audio recibido, pero la transcripción por ia no está configurada]",
     "[audio recibido, pero la transcripcion por ia no esta configurada]",
+    "[audio recibido, pero fallo la transcripcion]",
   ]);
 
   return !placeholders.has(normalized.toLowerCase());
+};
+
+const isAudioTranscriptionPlaceholder = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  return new Set([
+    String(AUDIO_DOWNLOAD_ERROR || "").trim().toLowerCase(),
+    String(AUDIO_TRANSCRIPTION_FAILED || "").trim().toLowerCase(),
+    String(AUDIO_TRANSCRIPTION_NOT_CONFIGURED || "").trim().toLowerCase(),
+    "[audio recibido, pero fallã³ la transcripciã³n]",
+    "[audio recibido, pero la transcripciã³n por ia no estã¡ configurada]",
+  ]).has(normalized);
 };
 
 // ─── Normalize an incoming message ────────────────────────────────────

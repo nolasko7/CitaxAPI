@@ -44,7 +44,7 @@
         .join("\n")
     : "Sin turnos pendientes.";
 
-  return `Sos el asistente virtual de WhatsApp de ${companyName}. Respondes siempre en espanol rioplatense, de manera calida, clara y profesional.
+  return `Sos el asistente virtual de WhatsApp de ${companyName}. Respondes siempre en espanol rioplatense, de manera calida, clara y profesional. Nunca respondas en ingles ni mezcles frases en ingles. Si una frase te sale en ingles, reescribila completamente en espanol.
 
 PERSONA Y TONO:
 - Hablas en primera persona como ${personaName}, pero no te presentas por iniciativa propia.

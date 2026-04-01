@@ -23,10 +23,12 @@ const {
 
 const AI_ENABLED = (process.env.WHATSAPP_AI_ENABLED || "true") === "true";
 const DEFAULT_PROVIDER_BASE_URLS = {
+  ollama: "http://localhost:11434/v1",
   groq: "https://api.groq.com/openai/v1",
   openrouter: "https://openrouter.ai/api/v1",
 };
 const DEFAULT_PROVIDER_MODELS = {
+  ollama: "llama3.2",
   groq: "llama-3.3-70b-versatile",
   openrouter: "openrouter/free",
 };
@@ -58,7 +60,29 @@ const normalizeProviderName = (value, fallback = "") => {
   return normalized || fallback;
 };
 
+const resolveOllamaOpenAiBaseUrl = (value) => {
+  const normalized = String(value || "").trim().replace(/\/$/, "");
+
+  if (!normalized) {
+    return DEFAULT_PROVIDER_BASE_URLS.ollama;
+  }
+
+  if (normalized.endsWith("/v1")) {
+    return normalized;
+  }
+
+  if (normalized.endsWith("/api")) {
+    return `${normalized.slice(0, -4)}/v1`;
+  }
+
+  return `${normalized}/v1`;
+};
+
 const getProviderApiKeyFromEnv = (providerName) => {
+  if (providerName === "ollama") {
+    return String(process.env.OLLAMA_API_KEY || "").trim();
+  }
+
   if (providerName === "groq") {
     return String(process.env.GROQ_API_KEY || "").trim();
   }
@@ -71,6 +95,12 @@ const getProviderApiKeyFromEnv = (providerName) => {
 };
 
 const getProviderBaseUrlFromEnv = (providerName) => {
+  if (providerName === "ollama") {
+    return resolveOllamaOpenAiBaseUrl(
+      process.env.OLLAMA_API_URL || DEFAULT_PROVIDER_BASE_URLS.ollama
+    );
+  }
+
   if (providerName === "groq") {
     return String(process.env.GROQ_BASE_URL || DEFAULT_PROVIDER_BASE_URLS.groq).trim();
   }
@@ -83,6 +113,10 @@ const getProviderBaseUrlFromEnv = (providerName) => {
 };
 
 const getProviderModelFromEnv = (providerName) => {
+  if (providerName === "ollama") {
+    return String(process.env.OLLAMA_MODEL || DEFAULT_PROVIDER_MODELS.ollama).trim();
+  }
+
   if (providerName === "groq") {
     return String(process.env.GROQ_MODEL || DEFAULT_PROVIDER_MODELS.groq).trim();
   }
@@ -649,8 +683,11 @@ const toLangChainAIMessage = (responseData) => {
 const buildProviderHeaders = (provider) => {
   const headers = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${provider.apiKey}`,
   };
+
+  if (provider.apiKey) {
+    headers.Authorization = `Bearer ${provider.apiKey}`;
+  }
 
   if (provider.name === "openrouter") {
     headers["X-Title"] = process.env.OPENROUTER_APP_NAME || "CitaxAPI";
