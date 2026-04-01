@@ -11,13 +11,25 @@ const {
   registerWebhook,
   storeLatestQr,
 } = require("../services/evolution.service");
+const {
+  getSuperadminCredentials,
+  normalizeCredentialValue,
+  normalizeEmail,
+} = require("../services/superadminAuth.service");
 
 const router = express.Router();
 
-const SUPERADMIN_EMAIL = process.env.SUPERADMIN_EMAIL || "superadmin@citax.local";
-const SUPERADMIN_PASSWORD = process.env.SUPERADMIN_PASSWORD || "citax-superadmin";
-const SUPERADMIN_SECRET = process.env.SUPERADMIN_JWT_SECRET || process.env.JWT_SECRET || "superadmin-secret";
+const superadminCredentials = getSuperadminCredentials();
+const SUPERADMIN_EMAIL = superadminCredentials.email;
+const SUPERADMIN_PASSWORD = superadminCredentials.password;
+const SUPERADMIN_SECRET = superadminCredentials.secret;
 const SUPPORT_INSTANCE = normalizeInstanceName(process.env.SUPPORT_WHATSAPP_INSTANCE || "citax-support-whatsapp");
+
+if (superadminCredentials.usingDefaults) {
+  console.warn(
+    "[superadmin] SUPERADMIN_EMAIL o SUPERADMIN_PASSWORD no estan configurados; usando credenciales por defecto."
+  );
+}
 
 const authSuperadmin = (req, res, next) => {
   const authHeader = req.headers.authorization || "";
@@ -37,7 +49,10 @@ const authSuperadmin = (req, res, next) => {
 
 router.post("/login", (req, res) => {
   const { email, password } = req.body || {};
-  if (email !== SUPERADMIN_EMAIL || password !== SUPERADMIN_PASSWORD) {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedPassword = normalizeCredentialValue(password);
+
+  if (normalizedEmail !== SUPERADMIN_EMAIL || normalizedPassword !== SUPERADMIN_PASSWORD) {
     return res.status(401).json({ error: "Credenciales inválidas" });
   }
 
