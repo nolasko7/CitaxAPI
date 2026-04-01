@@ -287,6 +287,62 @@ test("stringifyMessageContent preserves plain user text", () => {
   }
 });
 
+test("getConfiguredWelcomeMessage prefers configured greeting and falls back to default", () => {
+  const { service, restore } = loadServiceWithEnv({
+    GROQ_API_KEY: "groq-test-key",
+  });
+
+  try {
+    assert.equal(
+      service.__testables.getConfiguredWelcomeMessage({
+        welcomeMessage: "Buenas, soy Sergio. Decime si queres reservar.",
+      }),
+      "Buenas, soy Sergio. Decime si queres reservar.",
+    );
+    assert.equal(
+      service.__testables.getConfiguredWelcomeMessage({}),
+      "Hola, como estas amigaso, queres reservar un turno para hoy?",
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("shouldUseConfiguredWelcomeReply only triggers for initial pure greetings", () => {
+  const { service, restore } = loadServiceWithEnv({
+    GROQ_API_KEY: "groq-test-key",
+  });
+
+  try {
+    assert.equal(
+      service.__testables.shouldUseConfiguredWelcomeReply({
+        history: [],
+        incomingText: "Hola, como estas",
+        welcomeMessage: "Buenas, soy Sergio. Decime si queres reservar.",
+      }),
+      true,
+    );
+    assert.equal(
+      service.__testables.shouldUseConfiguredWelcomeReply({
+        history: [new AIMessage({ content: "Mensaje previo" })],
+        incomingText: "Hola",
+        welcomeMessage: "Buenas, soy Sergio. Decime si queres reservar.",
+      }),
+      false,
+    );
+    assert.equal(
+      service.__testables.shouldUseConfiguredWelcomeReply({
+        history: [],
+        incomingText: "Hola, quiero un turno",
+        welcomeMessage: "Buenas, soy Sergio. Decime si queres reservar.",
+      }),
+      false,
+    );
+  } finally {
+    restore();
+  }
+});
+
 test("isClosingOnlyMessage detects pure closing replies", () => {
   const { service, restore } = loadServiceWithEnv({
     GROQ_API_KEY: "groq-test-key",

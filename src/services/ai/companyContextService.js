@@ -1,4 +1,4 @@
-﻿const prisma = require("../../config/prisma");
+const prisma = require("../../config/prisma");
 const {
   buildAvailabilityMap,
   isNullishAvailability,
@@ -195,6 +195,7 @@ const getCompanyContextByInstanceName = async (instanceName, customerPhone = nul
     horarios,
     customerPendingAppointments,
     assistantPersonaName: personaName,
+    welcomeMessage: String(botConfig?.mensaje_bienvenida || "").trim(),
     singleProviderMode,
     primerPersonaActiva,
   };

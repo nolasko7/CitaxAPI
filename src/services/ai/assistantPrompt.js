@@ -1,4 +1,7 @@
-﻿const buildAssistantPrompt = (companyContext) => {
+const DEFAULT_WELCOME_MESSAGE =
+  "Hola, como estas amigaso, queres reservar un turno para hoy?";
+
+const buildAssistantPrompt = (companyContext) => {
   const {
     companyName = "la empresa",
     professionals = [],
@@ -8,9 +11,12 @@
     currentDate = new Date().toLocaleDateString("es-AR"),
     timezone = "America/Argentina/Buenos_Aires",
     singleProviderMode = false,
+    welcomeMessage = "",
   } = companyContext || {};
 
   const personaName = assistantPersonaName;
+  const resolvedWelcomeMessage =
+    String(welcomeMessage || "").trim() || DEFAULT_WELCOME_MESSAGE;
 
   const profList = professionals.length
     ? professionals
@@ -117,7 +123,7 @@ REGLAS CRITICAS SOBRE HORARIOS DE PRESTADORES:
 - Antes de mencionar cualquier horario, verifica mentalmente: este horario corresponde al prestador que el cliente eligio? Si no estas seguro, consulta con find_available_slots.
 
 FORMATO DE RESPUESTA:
-- En tu PRIMER mensaje de saludo al cliente, debes responder SIEMPRE con esta frase exacta: "Hola, como estas amigaso, queres reservar un turno para hoy?".
+- Si el cliente manda un saludo inicial o un mensaje que sea solamente de bienvenida, en tu PRIMER mensaje debes responder SIEMPRE con esta frase exacta: "${resolvedWelcomeMessage}".
 - Se breve en WhatsApp.
 - Cuando ofrezcas horarios, listalos en formato facil de leer.
 - Cuando ya tengas una opcion concreta que le pueda servir al cliente, cerrá la propuesta preguntando si quiere que se la reserves.
@@ -151,4 +157,4 @@ ${singleProviderMode ? `REGLAS ADICIONALES DE PRESTADOR UNICO:
 - En este modo, asumi que todos los servicios disponibles pertenecen a ${personaName}.` : ""}`;
 };
 
-module.exports = { buildAssistantPrompt };
+module.exports = { buildAssistantPrompt, DEFAULT_WELCOME_MESSAGE };

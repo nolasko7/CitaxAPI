@@ -1,4 +1,4 @@
-﻿const {
+const {
   AIMessage,
   HumanMessage,
   SystemMessage,
@@ -29,7 +29,10 @@ const {
   getSupportSessionDb,
   setSupportSessionDb,
 } = require("../supportAuthSession.service");
-const { buildAssistantPrompt } = require("./assistantPrompt");
+const {
+  buildAssistantPrompt,
+  DEFAULT_WELCOME_MESSAGE,
+} = require("./assistantPrompt");
 const {
   formatNaturalDate,
   summarizeAvailableSlotsForAssistant,
@@ -541,6 +544,80 @@ const normalizeAssistantText = (value) =>
     .replace(/[!?.,;:()[\]{}"']/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+const getConfiguredWelcomeMessage = (companyContext = {}) =>
+  String(companyContext?.welcomeMessage || "").trim() || DEFAULT_WELCOME_MESSAGE;
+
+const isGreetingOnlyMessage = (value) => {
+  const normalized = normalizeAssistantText(value);
+  if (!normalized) return false;
+
+  const blockingKeywords = [
+    "turno",
+    "reserv",
+    "sacar",
+    "agenda",
+    "horario",
+    "hora",
+    "fecha",
+    "manana",
+    "hoy",
+    "pasado",
+    "viernes",
+    "lunes",
+    "martes",
+    "miercoles",
+    "jueves",
+    "sabado",
+    "domingo",
+    "cancel",
+    "reprogram",
+    "cambiar",
+    "consulta",
+    "pregunta",
+    "precio",
+    "cuanto",
+    "servicio",
+    "promo",
+    "promocion",
+  ];
+
+  if (blockingKeywords.some((keyword) => normalized.includes(keyword))) {
+    return false;
+  }
+
+  const words = normalized.split(" ").filter(Boolean);
+  if (!words.length || words.length > 8) return false;
+
+  const greetingPhrases = [
+    "hola",
+    "holi",
+    "buen dia",
+    "buenas",
+    "buenas tardes",
+    "buenas noches",
+    "que onda",
+    "como estas",
+    "como andas",
+    "como va",
+    "todo bien",
+    "buen dia como va",
+  ];
+
+  return greetingPhrases.some((phrase) => normalized.includes(phrase));
+};
+
+const shouldUseConfiguredWelcomeReply = ({
+  history = [],
+  incomingText = "",
+  welcomeMessage = "",
+}) => {
+  if (!String(welcomeMessage || "").trim()) {
+    return false;
+  }
+
+  return history.length === 0 && isGreetingOnlyMessage(incomingText);
+};
 
 const isClosingOnlyMessage = (value) => {
   const normalized = normalizeAssistantText(value);
@@ -1586,6 +1663,33 @@ const runWhatsappAssistant = async ({
       companyContext,
     };
   }
+
+  const welcomeReply = getConfiguredWelcomeMessage(companyContext);
+  if (
+    shouldUseConfiguredWelcomeReply({
+      history,
+      incomingText: messageText,
+      welcomeMessage: welcomeReply,
+    })
+  ) {
+    const updatedHistory = [
+      ...history,
+      new HumanMessage(messageText),
+      new AIMessage(welcomeReply),
+    ];
+
+    setConversationHistory({
+      instanceName,
+      customerPhone,
+      messages: updatedHistory,
+    });
+
+    return {
+      enabled: true,
+      text: welcomeReply,
+      companyContext,
+    };
+  }
   const { result, provider } = await invokeGraphWithFallback({
     tools,
     messages: [
@@ -1747,13 +1851,16 @@ module.exports = {
   runSupportAssistant,
   __testables: {
     getConfiguredProviders,
+    getConfiguredWelcomeMessage,
     getToolDefinitions,
     extractAssistantReplyFromMessages,
     isClosingOnlyMessage,
+    isGreetingOnlyMessage,
     looksLikeAppointmentConfirmation,
     ensureAppointmentConfirmationClosing,
     sanitizeNonReplyOutput,
     shouldSilenceClosingReply,
+    shouldUseConfiguredWelcomeReply,
     parseInlineToolCallsFromContent,
     sanitizeAssistantReply,
     stringifyMessageContent,
