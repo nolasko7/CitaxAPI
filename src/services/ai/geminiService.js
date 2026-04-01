@@ -921,7 +921,7 @@ const createTools = ({ companyContext, customerPhone }) => {
             // Solo proveemos metadata principal.
             // Para conocer la disponibilidad real, Gemini DEBE llamar a find_available_slots.
             requisito:
-              "Para saber si este prestador atiende un dÃ­a u horario, DEBES usar obligatoriamente la herramienta find_available_slots. NO asumas ningÃºn horario comercial.",
+              "Para saber si este prestador atiende un dÃƒÂ­a u horario, DEBES usar obligatoriamente la herramienta find_available_slots. NO asumas ningÃƒÂºn horario comercial.",
           })),
           services: companyContext.services,
         });
@@ -952,7 +952,7 @@ const createTools = ({ companyContext, customerPhone }) => {
         return JSON.stringify({
           groupedSlots,
           rules:
-            "UsÃ¡ solamente estos prestadores y estos horarios. Si displayMode es 'range', resumÃ­ como rango. Si es 'list', podÃ©s enumerar los horarios. Si un prestador no aparece acÃ¡, no lo ofrezcas.",
+            "Usa solamente estos prestadores y estos horarios. Si displayMode es 'range', resumilo como una sola franja continua. Si displayMode es 'multi_range', debes mencionar cada franja por separado y nunca unirlas como si fueran continuas. Si displayMode es 'list', podes enumerar los horarios. Los horarios reservables son SOLO los valores exactos de times: no ofrezcas ni confirmes horas intermedias que no aparezcan ahi. Si un prestador no aparece aca, no lo ofrezcas.",
         });
       },
       {
@@ -977,7 +977,7 @@ const createTools = ({ companyContext, customerPhone }) => {
             .number()
             .optional()
             .default(30)
-            .describe("MÃ¡ximo de resultados (1-40)."),
+            .describe("MÃƒÂ¡ximo de resultados (1-40)."),
         }),
       },
     ),
@@ -1014,11 +1014,11 @@ const createTools = ({ companyContext, customerPhone }) => {
       {
         name: "create_appointment",
         description:
-          "Crea un turno confirmado. Solo usar cuando el cliente ya confirmÃ³.",
+          "Crea un turno confirmado. Solo usar cuando el cliente ya confirmÃƒÂ³.",
         schema: z.object({
           clientName: z
             .string()
-            .describe("Nombre del cliente (mÃ­nimo 3 caracteres)."),
+            .describe("Nombre del cliente (mÃƒÂ­nimo 3 caracteres)."),
           professionalId: z.number().describe("ID del prestador."),
           serviceId: z
             .number()
@@ -1042,7 +1042,7 @@ const createTools = ({ companyContext, customerPhone }) => {
       },
       {
         name: "get_appointments_by_day",
-        description: "Lista los turnos reservados para un dÃ­a especÃ­fico.",
+        description: "Lista los turnos reservados para un dÃƒÂ­a especÃƒÂ­fico.",
         schema: z.object({
           date: z
             .string()
@@ -1062,7 +1062,7 @@ const createTools = ({ companyContext, customerPhone }) => {
         });
 
         if (result.status === "multiple_found") {
-          return `EncontrÃ© varios turnos. Â¿CuÃ¡l querÃ©s cancelar?\n${result.appointments.map((a) => `- ${a.date} a las ${a.time}`).join("\n")}`;
+          return `EncontrÃƒÂ© varios turnos. Ã‚Â¿CuÃƒÂ¡l querÃƒÂ©s cancelar?\n${result.appointments.map((a) => `- ${a.date} a las ${a.time}`).join("\n")}`;
         }
         return `Turno del ${result.date} a las ${result.time} cancelado exitosamente.`;
       },
@@ -1086,7 +1086,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
         if (!authResult) {
           return JSON.stringify({
             success: false,
-            error: "Credenciales invÃ¡lidas.",
+            error: "Credenciales invÃƒÂ¡lidas.",
           });
         }
         await setSupportSession({
@@ -1121,17 +1121,17 @@ const createSupportTools = ({ customerPhone, supportState }) => {
       {
         name: "login_empresa",
         description:
-          "Valida email y contraseÃ±a de empresa para asociar esta conversaciÃ³n.",
+          "Valida email y contraseÃƒÂ±a de empresa para asociar esta conversaciÃƒÂ³n.",
         schema: z.object({
           email: z.string().describe("Email de acceso de la empresa."),
-          password: z.string().describe("ContraseÃ±a de acceso de la empresa."),
+          password: z.string().describe("ContraseÃƒÂ±a de acceso de la empresa."),
         }),
       },
     ),
     tool(
       async ({ professionalName, serviceId, startDate, endDate, limit }) => {
         if (!supportState.companyId) {
-          throw new Error("Primero ejecutÃ¡ login_empresa.");
+          throw new Error("Primero ejecutÃƒÂ¡ login_empresa.");
         }
         const slots = await listAvailableSlots({
           companyId: supportState.companyId,
@@ -1150,7 +1150,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
         return JSON.stringify({
           groupedSlots,
           rules:
-            "UsÃ¡ solamente estos prestadores y estos horarios. Si displayMode es 'range', resumÃ­ como rango. Si es 'list', podÃ©s enumerar los horarios. Si un prestador no aparece acÃ¡, no lo ofrezcas.",
+            "Usa solamente estos prestadores y estos horarios. Si displayMode es 'range', resumilo como una sola franja continua. Si displayMode es 'multi_range', debes mencionar cada franja por separado y nunca unirlas como si fueran continuas. Si displayMode es 'list', podes enumerar los horarios. Los horarios reservables son SOLO los valores exactos de times: no ofrezcas ni confirmes horas intermedias que no aparezcan ahi. Si un prestador no aparece aca, no lo ofrezcas.",
         });
       },
       {
@@ -1175,7 +1175,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
         time,
       }) => {
         if (!supportState.companyId) {
-          throw new Error("Primero ejecutÃ¡ login_empresa.");
+          throw new Error("Primero ejecutÃƒÂ¡ login_empresa.");
         }
         const normalizedClientPhone = String(clientPhone || "")
           .replace(/[^\d]/g, "")
@@ -1222,7 +1222,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
     tool(
       async ({ date }) => {
         if (!supportState.companyId) {
-          throw new Error("Primero ejecutÃ¡ login_empresa.");
+          throw new Error("Primero ejecutÃƒÂ¡ login_empresa.");
         }
         const appointments = await listAppointmentsByDay({
           companyId: supportState.companyId,
@@ -1233,14 +1233,14 @@ const createSupportTools = ({ customerPhone, supportState }) => {
       },
       {
         name: "get_appointments_by_day",
-        description: "Lista turnos del dÃ­a de la empresa autenticada.",
+        description: "Lista turnos del dÃƒÂ­a de la empresa autenticada.",
         schema: z.object({ date: z.string().optional() }),
       },
     ),
     tool(
       async ({ date, time, professionalName, clientName }) => {
         if (!supportState.companyId) {
-          throw new Error("Primero ejecutÃ¡ login_empresa.");
+          throw new Error("Primero ejecutÃƒÂ¡ login_empresa.");
         }
         const result = await cancelAppointmentByCompanyFromAssistant({
           companyId: supportState.companyId,
@@ -1291,7 +1291,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
           return JSON.stringify({
             success: false,
             error:
-              "No encontrÃ© un telÃ©fono destino para avisar (cliente cancelado o SUPPORT_NOTIFY_PHONE).",
+              "No encontrÃƒÂ© un telÃƒÂ©fono destino para avisar (cliente cancelado o SUPPORT_NOTIFY_PHONE).",
           });
         }
         const resolvedDate = date || last.date || "sin fecha";
@@ -1332,13 +1332,13 @@ const createSupportTools = ({ customerPhone, supportState }) => {
           const details = error.response?.data || null;
           console.error(`\n==============================================`);
           console.error(
-            "âŒ ERROR CRÃTICO - enviando aviso de cancelaciÃ³n al cliente",
+            "Ã¢ÂÅ’ ERROR CRÃƒÂTICO - enviando aviso de cancelaciÃƒÂ³n al cliente",
           );
           console.error(
             "  Desde instancia de la empresa:",
             companyInstanceName,
           );
-          console.error("  TelÃ©fono destino:", targetPhone);
+          console.error("  TelÃƒÂ©fono destino:", targetPhone);
           console.error("  Texto:", text);
           console.error("  Status HTTP:", error.response?.status || "N/A");
           console.error("  Mensaje error NATIVO:", error.message);
@@ -1358,7 +1358,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
       {
         name: "notify_cancellation_contact",
         description:
-          "EnvÃ­a aviso al contacto de notificaciÃ³n cuando se confirma una cancelaciÃ³n.",
+          "EnvÃƒÂ­a aviso al contacto de notificaciÃƒÂ³n cuando se confirma una cancelaciÃƒÂ³n.",
         schema: z.object({
           date: z.string().optional(),
           time: z.string().optional(),
@@ -1368,7 +1368,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
             .string()
             .optional()
             .describe(
-              "TelÃ©fono destino opcional; si no se envÃ­a, usa el cliente cancelado.",
+              "TelÃƒÂ©fono destino opcional; si no se envÃƒÂ­a, usa el cliente cancelado.",
             ),
         }),
       },
@@ -1376,14 +1376,14 @@ const createSupportTools = ({ customerPhone, supportState }) => {
   ];
 };
 
-// â”€â”€â”€ OpenAI-compatible tool definitions for Groq / OpenRouter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ OpenAI-compatible tool definitions for Groq / OpenRouter Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const TOOL_DEFINITIONS_BY_NAME = {
   login_empresa: {
     type: "function",
     function: {
       name: "login_empresa",
       description:
-        "Valida email y contraseÃ±a de empresa para asociar esta conversaciÃ³n.",
+        "Valida email y contraseÃƒÂ±a de empresa para asociar esta conversaciÃƒÂ³n.",
       parameters: {
         type: "object",
         properties: {
@@ -1393,7 +1393,7 @@ const TOOL_DEFINITIONS_BY_NAME = {
           },
           password: {
             type: "string",
-            description: "ContraseÃ±a de acceso de la empresa.",
+            description: "ContraseÃƒÂ±a de acceso de la empresa.",
           },
         },
         required: ["email", "password"],
@@ -1440,7 +1440,7 @@ const TOOL_DEFINITIONS_BY_NAME = {
           },
           limit: {
             type: "number",
-            description: "MÃ¡ximo de resultados (1-40).",
+            description: "MÃƒÂ¡ximo de resultados (1-40).",
           },
         },
         required: [],
@@ -1452,13 +1452,13 @@ const TOOL_DEFINITIONS_BY_NAME = {
     function: {
       name: "create_appointment",
       description:
-        "Crea un turno confirmado. Solo usar cuando el cliente ya confirmÃ³.",
+        "Crea un turno confirmado. Solo usar cuando el cliente ya confirmÃƒÂ³.",
       parameters: {
         type: "object",
         properties: {
           clientName: {
             type: "string",
-            description: "Nombre del cliente (mÃ­nimo 3 caracteres).",
+            description: "Nombre del cliente (mÃƒÂ­nimo 3 caracteres).",
           },
           clientPhone: {
             type: "string",
@@ -1491,7 +1491,7 @@ const TOOL_DEFINITIONS_BY_NAME = {
     type: "function",
     function: {
       name: "get_appointments_by_day",
-      description: "Lista los turnos reservados para un dÃ­a especÃ­fico.",
+      description: "Lista los turnos reservados para un dÃƒÂ­a especÃƒÂ­fico.",
       parameters: {
         type: "object",
         properties: {
@@ -1530,7 +1530,7 @@ const TOOL_DEFINITIONS_BY_NAME = {
           },
           phone: {
             type: "string",
-            description: "TelÃ©fono destino opcional para avisos.",
+            description: "TelÃƒÂ©fono destino opcional para avisos.",
           },
         },
         required: [],
@@ -1542,7 +1542,7 @@ const TOOL_DEFINITIONS_BY_NAME = {
     function: {
       name: "notify_cancellation_contact",
       description:
-        "EnvÃ­a aviso al contacto configurado sobre una cancelaciÃ³n confirmada.",
+        "EnvÃƒÂ­a aviso al contacto configurado sobre una cancelaciÃƒÂ³n confirmada.",
       parameters: {
         type: "object",
         properties: {
@@ -1600,7 +1600,7 @@ const invokeGraphWithFallback = async ({ tools, messages }) => {
 
       if (!reply) {
         const emptyReplyError = new Error(
-          "El proveedor terminÃ³ el flujo sin respuesta final.",
+          "El proveedor terminÃƒÂ³ el flujo sin respuesta final.",
         );
         emptyReplyError.code = "empty_final_reply";
         throw emptyReplyError;
@@ -1609,7 +1609,7 @@ const invokeGraphWithFallback = async ({ tools, messages }) => {
       return { result, provider };
     } catch (error) {
       lastError = error;
-      console.error(`âŒ Error ejecutando proveedor LLM (${provider.label}):`, {
+      console.error(`Ã¢ÂÅ’ Error ejecutando proveedor LLM (${provider.label}):`, {
         message: error.message,
         status: error.response?.status,
         data: error.response?.data || null,
@@ -1629,7 +1629,7 @@ const runWhatsappAssistant = async ({
     return {
       enabled: false,
       reason:
-        "LLM no configurada. DefinÃ­ la API key del proveedor primario o secundario, o deshabilitÃ¡ la IA.",
+        "LLM no configurada. DefinÃƒÂ­ la API key del proveedor primario o secundario, o deshabilitÃƒÂ¡ la IA.",
     };
   }
 
@@ -1657,7 +1657,7 @@ const runWhatsappAssistant = async ({
         customerPhone,
       );
     } catch (error) {
-      console.error("âŒ Error cargando contexto:", error.message);
+      console.error("Ã¢ÂÅ’ Error cargando contexto:", error.message);
       return {
         enabled: false,
         reason: "Error cargando contexto de la empresa.",
@@ -1682,11 +1682,11 @@ const runWhatsappAssistant = async ({
     currentDate: realtimeContext.localDate,
     currentTime: realtimeContext.localTime,
   });
-  const temporalRef = `Referencia temporal obligatoria: fecha local actual ${realtimeContext.localDate}, hora local ${realtimeContext.localTime}, zona ${realtimeContext.timezone}, timestamp UTC ${realtimeContext.isoUtc}. UsÃ¡ esta referencia como fuente de verdad para interpretar "hoy", "maÃ±ana" y fechas relativas.`;
+  const temporalRef = `Referencia temporal obligatoria: fecha local actual ${realtimeContext.localDate}, hora local ${realtimeContext.localTime}, zona ${realtimeContext.timezone}, timestamp UTC ${realtimeContext.isoUtc}. UsÃƒÂ¡ esta referencia como fuente de verdad para interpretar "hoy", "maÃƒÂ±ana" y fechas relativas.`;
   const contactRef = preferredName
     ? `Este cliente figura como '${preferredName}' en WhatsApp.`
-    : "No hay nombre de contacto disponible, usÃ¡ trato neutro.";
-  const phoneRef = `TelÃ©fono del cliente (no lo pidas): ${customerPhone}.`;
+    : "No hay nombre de contacto disponible, usÃƒÂ¡ trato neutro.";
+  const phoneRef = `TelÃƒÂ©fono del cliente (no lo pidas): ${customerPhone}.`;
 
   const history = getConversationHistory({ instanceName, customerPhone });
   if (shouldSilenceClosingReply({ history, incomingText: messageText })) {
@@ -1734,7 +1734,7 @@ const runWhatsappAssistant = async ({
     ],
   });
 
-  console.log("ðŸ¤– Graph invoke:", {
+  console.log("Ã°Å¸Â¤â€“ Graph invoke:", {
     instanceName,
     customerPhone,
     provider: provider.label,
@@ -1751,7 +1751,7 @@ const runWhatsappAssistant = async ({
   if (!finalReply) {
     return {
       enabled: false,
-      reason: "El asistente decidiÃ³ no responder.",
+      reason: "El asistente decidiÃƒÂ³ no responder.",
       companyContext,
     };
   }
@@ -1823,19 +1823,19 @@ const runSupportAssistant = async ({ incomingMessage }) => {
       ? `Hay exactamente un solo prestador activo en esta empresa: ${supportCompanyContext.professionals[0].name} (ID ${supportCompanyContext.professionals[0].id}). Si te piden agendar un turno, NO preguntes con que profesional. Asumi ese prestador automaticamente para buscar disponibilidad y para crear el turno.`
       : "Si hay mas de un prestador activo y el cliente no especifico cual quiere, ahi si pedi o inferi el prestador correcto antes de crear el turno.";
   const supportPrompt = `Sos el bot de soporte de Citax por WhatsApp.
-Si la conversaciÃ³n no tiene empresa autenticada, pedÃ­ email y contraseÃ±a de forma clara.
-Cuando tengas email y contraseÃ±a, ejecutÃ¡ la tool login_empresa.
+Si la conversaciÃƒÂ³n no tiene empresa autenticada, pedÃƒÂ­ email y contraseÃƒÂ±a de forma clara.
+Cuando tengas email y contraseÃƒÂ±a, ejecutÃƒÂ¡ la tool login_empresa.
 No digas que el login fue exitoso sin ejecutar la tool.
-DespuÃ©s del login, podÃ©s ayudar con: agendar turno, cancelar turno y ver agenda del dÃ­a usando tools.
+DespuÃƒÂ©s del login, podÃƒÂ©s ayudar con: agendar turno, cancelar turno y ver agenda del dÃƒÂ­a usando tools.
 ${singleSupportProviderRule}
 Si vas a agendar un turno para un cliente de la empresa, con el nombre del cliente alcanza para crear el turno.
-Solo pedÃ­ telefono del cliente si realmente hace falta como dato adicional o si la empresa quiere dejarlo asociado.
-Nunca uses el numero de WhatsApp del operador que estÃ¡ hablando con soporte como telefono del cliente, salvo que te digan explÃ­citamente que el turno es para ese mismo numero.
-Cuando canceles un turno y la cancelaciÃ³n sea exitosa, preguntÃ¡ explÃ­citamente: "Â¿QuerÃ©s que le avise al cliente?".
-Si te responden que sÃ­, ejecutÃ¡ notify_cancellation_contact.
-Primero intentÃ¡ avisar al cliente del turno cancelado; si no hay telÃ©fono de cliente, usÃ¡ el contacto general (${SUPPORT_NOTIFY_LABEL}) si estÃ¡ configurado.
-Nunca confirmes que se enviÃ³ un aviso si la tool devuelve success=false.
-RespondÃ© en espaÃ±ol, corto y claro, estilo WhatsApp.
+Solo pedÃƒÂ­ telefono del cliente si realmente hace falta como dato adicional o si la empresa quiere dejarlo asociado.
+Nunca uses el numero de WhatsApp del operador que estÃƒÂ¡ hablando con soporte como telefono del cliente, salvo que te digan explÃƒÂ­citamente que el turno es para ese mismo numero.
+Cuando canceles un turno y la cancelaciÃƒÂ³n sea exitosa, preguntÃƒÂ¡ explÃƒÂ­citamente: "Ã‚Â¿QuerÃƒÂ©s que le avise al cliente?".
+Si te responden que sÃƒÂ­, ejecutÃƒÂ¡ notify_cancellation_contact.
+Primero intentÃƒÂ¡ avisar al cliente del turno cancelado; si no hay telÃƒÂ©fono de cliente, usÃƒÂ¡ el contacto general (${SUPPORT_NOTIFY_LABEL}) si estÃƒÂ¡ configurado.
+Nunca confirmes que se enviÃƒÂ³ un aviso si la tool devuelve success=false.
+RespondÃƒÂ© en espaÃƒÂ±ol, corto y claro, estilo WhatsApp.
 Empresa autenticada actual: ${supportState.companyName || "ninguna"}.
 ${supportProfessionalsRef}
 Referencia temporal obligatoria: fecha local actual ${realtimeContext.localDate}, hora local ${realtimeContext.localTime}, zona ${realtimeContext.timezone}, timestamp UTC ${realtimeContext.isoUtc}.`;
@@ -1849,7 +1849,7 @@ Referencia temporal obligatoria: fecha local actual ${realtimeContext.localDate}
     ],
   });
 
-  console.log("ðŸ¤– Support graph invoke:", {
+  console.log("Ã°Å¸Â¤â€“ Support graph invoke:", {
     customerPhone,
     provider: provider.label,
     model: provider.model,
