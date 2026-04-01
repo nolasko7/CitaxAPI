@@ -6,6 +6,7 @@ const {
   disconnectInstance,
   getLatestQr,
   getSafeConnectionState,
+  invalidateCompanyInternalPhonesCache,
   normalizeInstanceName,
   normalizeQrPayload,
   registerWebhook,
@@ -21,7 +22,7 @@ const persistWhatsappInstance = async ({ companyId, instanceName, phoneNumber, s
   const isConnected = status === "open";
 
   if (config) {
-    return await prisma.cONFIG_WHATSAPP.update({
+    const updated = await prisma.cONFIG_WHATSAPP.update({
       where: { id_whatsapp: config.id_whatsapp },
       data: {
         instance_name: instanceName,
@@ -29,8 +30,10 @@ const persistWhatsappInstance = async ({ companyId, instanceName, phoneNumber, s
         conectado: isConnected,
       }
     });
+    invalidateCompanyInternalPhonesCache();
+    return updated;
   } else {
-    return await prisma.cONFIG_WHATSAPP.create({
+    const created = await prisma.cONFIG_WHATSAPP.create({
       data: {
         id_empresa: companyId,
         instance_name: instanceName,
@@ -38,6 +41,8 @@ const persistWhatsappInstance = async ({ companyId, instanceName, phoneNumber, s
         conectado: isConnected,
       }
     });
+    invalidateCompanyInternalPhonesCache();
+    return created;
   }
 };
 

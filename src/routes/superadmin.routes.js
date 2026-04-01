@@ -16,6 +16,7 @@ const {
   normalizeCredentialValue,
   normalizeEmail,
 } = require("../services/superadminAuth.service");
+const { setSupportInstancePhone } = require("../services/internalWhatsapp.service");
 
 const router = express.Router();
 
@@ -93,6 +94,9 @@ router.get("/support-whatsapp/status", async (req, res) => {
 router.post("/support-whatsapp/connect", async (req, res) => {
   try {
     const { number } = req.body || {};
+    if (number) {
+      setSupportInstancePhone(number);
+    }
     let result;
     try {
       result = await createInstanceWithQr({

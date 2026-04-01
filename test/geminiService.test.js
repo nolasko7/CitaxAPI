@@ -1,23 +1,12 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { AIMessage, HumanMessage, ToolMessage } = require("@langchain/core/messages");
+const { AIMessage, HumanMessage } = require("@langchain/core/messages");
 
 const loadServiceWithEnv = (overrides = {}) => {
   const envKeys = [
-    "LLM_PRIMARY_PROVIDER",
-    "LLM_PRIMARY_API_KEY",
-    "LLM_PRIMARY_BASE_URL",
-    "GROQ_API_KEY",
-    "LLM_PRIMARY_MODEL",
-    "GROQ_MODEL",
-    "LLM_PRIMARY_LABEL",
-    "LLM_FALLBACK_PROVIDER",
-    "LLM_FALLBACK_API_KEY",
-    "LLM_FALLBACK_BASE_URL",
-    "OPENROUTER_API_KEY",
-    "LLM_FALLBACK_MODEL",
-    "LLM_FALLBACK_LABEL",
-    "OPENROUTER_MODEL",
+    "GOOGLE_API_KEY",
+    "GEMINI_MODEL",
+    "GEMINI_MAX_RETRIES",
     "WHATSAPP_AI_ENABLED",
   ];
   const previous = {};
@@ -49,181 +38,30 @@ const loadServiceWithEnv = (overrides = {}) => {
   return { service, restore };
 };
 
-test("getConfiguredProviders returns Groq primary and OpenRouter fallback", () => {
+test("getGeminiConfig returns the configured Gemini model and key", () => {
   const { service, restore } = loadServiceWithEnv({
-    LLM_PRIMARY_PROVIDER: "groq",
-    LLM_PRIMARY_MODEL: "llama-3.3-70b-versatile",
-    GROQ_API_KEY: "groq-test-key",
-    GROQ_MODEL: "llama-3.3-70b-versatile",
-    LLM_FALLBACK_PROVIDER: "openrouter",
-    OPENROUTER_API_KEY: "openrouter-test-key",
-    LLM_FALLBACK_MODEL: "openrouter/free",
+    GOOGLE_API_KEY: "google-test-key",
+    GEMINI_MODEL: "gemini-3-flash-preview",
   });
 
   try {
-    const providers = service.__testables.getConfiguredProviders();
-    assert.equal(providers.length, 2);
-    assert.equal(providers[0].name, "groq");
-    assert.equal(providers[0].model, "llama-3.3-70b-versatile");
-    assert.equal(providers[1].name, "openrouter");
-    assert.equal(providers[1].model, "openrouter/free");
+    const config = service.__testables.getGeminiConfig();
+    assert.equal(config.name, "google-genai");
+    assert.equal(config.model, "gemini-3-flash-preview");
+    assert.equal(config.apiKey, "google-test-key");
+    assert.equal(config.label, "google-gemini-3-flash-preview");
   } finally {
     restore();
   }
 });
 
-test("getConfiguredProviders supports OpenRouter primary and Groq fallback", () => {
+test("isAssistantConfigured only enables the bot when GOOGLE_API_KEY exists", () => {
   const { service, restore } = loadServiceWithEnv({
-    LLM_PRIMARY_PROVIDER: "openrouter",
-    LLM_PRIMARY_MODEL: "qwen/qwen3.6-plus-preview:free",
-    LLM_PRIMARY_LABEL: "openrouter-qwen-primary",
-    OPENROUTER_API_KEY: "openrouter-test-key",
-    LLM_FALLBACK_PROVIDER: "groq",
-    LLM_FALLBACK_MODEL: "llama-3.3-70b-versatile",
-    LLM_FALLBACK_LABEL: "groq-fallback",
-    GROQ_API_KEY: "groq-test-key",
+    GOOGLE_API_KEY: "",
   });
 
   try {
-    const providers = service.__testables.getConfiguredProviders();
-    assert.equal(providers.length, 2);
-    assert.equal(providers[0].name, "openrouter");
-    assert.equal(providers[0].model, "qwen/qwen3.6-plus-preview:free");
-    assert.equal(providers[0].label, "openrouter-qwen-primary");
-    assert.equal(providers[1].name, "groq");
-    assert.equal(providers[1].model, "llama-3.3-70b-versatile");
-    assert.equal(providers[1].label, "groq-fallback");
-  } finally {
-    restore();
-  }
-});
-
-test("getToolDefinitions only returns definitions for requested tools", () => {
-  const { service, restore } = loadServiceWithEnv({
-    GROQ_API_KEY: "groq-test-key",
-  });
-
-  try {
-    const definitions = service.__testables.getToolDefinitions([
-      { name: "find_available_slots" },
-      { name: "create_appointment" },
-    ]);
-
-    assert.deepEqual(
-      definitions.map((definition) => definition.function.name),
-      ["find_available_slots", "create_appointment"]
-    );
-  } finally {
-    restore();
-  }
-});
-
-test("toOpenAIChatMessage converts assistant tool calls and tool results", () => {
-  const { service, restore } = loadServiceWithEnv({
-    GROQ_API_KEY: "groq-test-key",
-  });
-
-  try {
-    const assistantMessage = new AIMessage({
-      content: "",
-      tool_calls: [
-        {
-          id: "call_1",
-          name: "find_available_slots",
-          args: { startDate: "2026-03-31" },
-        },
-      ],
-    });
-    const toolMessage = new ToolMessage({
-      content: "{\"slots\":[]}",
-      tool_call_id: "call_1",
-    });
-
-    const assistantPayload =
-      service.__testables.toOpenAIChatMessage(assistantMessage);
-    const toolPayload = service.__testables.toOpenAIChatMessage(toolMessage);
-
-    assert.equal(assistantPayload.role, "assistant");
-    assert.equal(assistantPayload.tool_calls[0].function.name, "find_available_slots");
-    assert.equal(toolPayload.role, "tool");
-    assert.equal(toolPayload.tool_call_id, "call_1");
-  } finally {
-    restore();
-  }
-});
-
-test("toLangChainAIMessage parses tool calls from OpenAI-compatible response", () => {
-  const { service, restore } = loadServiceWithEnv({
-    GROQ_API_KEY: "groq-test-key",
-  });
-
-  try {
-    const message = service.__testables.toLangChainAIMessage({
-      provider: "groq-llama-3.3-70b",
-      model: "llama-3.3-70b-versatile",
-      choices: [
-        {
-          finish_reason: "tool_calls",
-          message: {
-            content: "",
-            tool_calls: [
-              {
-                id: "call_2",
-                type: "function",
-                function: {
-                  name: "get_appointments_by_day",
-                  arguments: "{\"date\":\"2026-03-31\"}",
-                },
-              },
-            ],
-          },
-        },
-      ],
-      usage: {
-        prompt_tokens: 10,
-        completion_tokens: 4,
-        total_tokens: 14,
-      },
-    });
-
-    assert.equal(message.tool_calls.length, 1);
-    assert.equal(message.tool_calls[0].name, "get_appointments_by_day");
-    assert.deepEqual(message.tool_calls[0].args, { date: "2026-03-31" });
-    assert.equal(message.usage_metadata.total_tokens, 14);
-  } finally {
-    restore();
-  }
-});
-
-test("toLangChainAIMessage parses inline TOOLCALL markup into tool calls", () => {
-  const { service, restore } = loadServiceWithEnv({
-    GROQ_API_KEY: "groq-test-key",
-  });
-
-  try {
-    const message = service.__testables.toLangChainAIMessage({
-      provider: "groq-llama-3.1-8b",
-      model: "llama-3.1-8b-instant",
-      choices: [
-        {
-          finish_reason: "stop",
-          message: {
-            content:
-              'TOOLCALL>[{"name":"find_available_slots","arguments":{"startDate":"2026-03-31","endDate":"2026-03-31","limit":40,"professionalName":"Carlos"}}]<CALL>',
-          },
-        },
-      ],
-    });
-
-    assert.equal(message.tool_calls.length, 1);
-    assert.equal(message.tool_calls[0].name, "find_available_slots");
-    assert.deepEqual(message.tool_calls[0].args, {
-      startDate: "2026-03-31",
-      endDate: "2026-03-31",
-      limit: 40,
-      professionalName: "Carlos",
-    });
-    assert.equal(message.content, "");
+    assert.equal(service.isAssistantConfigured(), false);
   } finally {
     restore();
   }
@@ -231,7 +69,7 @@ test("toLangChainAIMessage parses inline TOOLCALL markup into tool calls", () =>
 
 test("sanitizeAssistantReply removes raw TOOLCALL protocol markers", () => {
   const { service, restore } = loadServiceWithEnv({
-    GROQ_API_KEY: "groq-test-key",
+    GOOGLE_API_KEY: "google-test-key",
   });
 
   try {
@@ -244,9 +82,33 @@ test("sanitizeAssistantReply removes raw TOOLCALL protocol markers", () => {
   }
 });
 
+test("parseInlineToolCallsFromContent parses inline TOOLCALL markup", () => {
+  const { service, restore } = loadServiceWithEnv({
+    GOOGLE_API_KEY: "google-test-key",
+  });
+
+  try {
+    const parsed = service.__testables.parseInlineToolCallsFromContent(
+      'TOOLCALL>[{"name":"find_available_slots","arguments":{"startDate":"2026-03-31","endDate":"2026-03-31","limit":40,"professionalName":"Carlos"}}]<CALL>'
+    );
+
+    assert.equal(parsed.toolCalls.length, 1);
+    assert.equal(parsed.toolCalls[0].name, "find_available_slots");
+    assert.deepEqual(parsed.toolCalls[0].args, {
+      startDate: "2026-03-31",
+      endDate: "2026-03-31",
+      limit: 40,
+      professionalName: "Carlos",
+    });
+    assert.equal(parsed.content, "");
+  } finally {
+    restore();
+  }
+});
+
 test("extractAssistantReplyFromMessages returns sanitized final assistant text", () => {
   const { service, restore } = loadServiceWithEnv({
-    GROQ_API_KEY: "groq-test-key",
+    GOOGLE_API_KEY: "google-test-key",
   });
 
   try {
@@ -274,7 +136,7 @@ test("extractAssistantReplyFromMessages returns sanitized final assistant text",
 
 test("stringifyMessageContent preserves plain user text", () => {
   const { service, restore } = loadServiceWithEnv({
-    GROQ_API_KEY: "groq-test-key",
+    GOOGLE_API_KEY: "google-test-key",
   });
 
   try {
@@ -289,7 +151,7 @@ test("stringifyMessageContent preserves plain user text", () => {
 
 test("getConfiguredWelcomeMessage renders {nombre_cliente} and falls back to default", () => {
   const { service, restore } = loadServiceWithEnv({
-    GROQ_API_KEY: "groq-test-key",
+    GOOGLE_API_KEY: "google-test-key",
   });
 
   try {
@@ -320,9 +182,32 @@ test("getConfiguredWelcomeMessage renders {nombre_cliente} and falls back to def
   }
 });
 
+test("buildFriendlyGreetingPrefix uses configured saludo on first conversation", () => {
+  const { service, restore } = loadServiceWithEnv({
+    GOOGLE_API_KEY: "google-test-key",
+  });
+
+  try {
+    assert.equal(
+      service.__testables.buildFriendlyGreetingPrefix({
+        ownPhrases: { saludos: "amigaso" },
+      }),
+      "Hola, amigaso"
+    );
+    assert.equal(
+      service.__testables.buildFriendlyGreetingPrefix({
+        ownPhrases: { saludos: "Buenas, como estas" },
+      }),
+      "Buenas, como estas"
+    );
+  } finally {
+    restore();
+  }
+});
+
 test("shouldUseConfiguredWelcomeReply only triggers for initial pure greetings", () => {
   const { service, restore } = loadServiceWithEnv({
-    GROQ_API_KEY: "groq-test-key",
+    GOOGLE_API_KEY: "google-test-key",
   });
 
   try {
@@ -350,6 +235,14 @@ test("shouldUseConfiguredWelcomeReply only triggers for initial pure greetings",
       }),
       false,
     );
+    assert.equal(
+      service.__testables.shouldUseConfiguredWelcomeReply({
+        hasPriorReply: true,
+        incomingText: "Hola",
+        welcomeMessage: "Buenas, soy Sergio. Decime si queres reservar.",
+      }),
+      false,
+    );
   } finally {
     restore();
   }
@@ -357,7 +250,7 @@ test("shouldUseConfiguredWelcomeReply only triggers for initial pure greetings",
 
 test("isClosingOnlyMessage detects pure closing replies", () => {
   const { service, restore } = loadServiceWithEnv({
-    GROQ_API_KEY: "groq-test-key",
+    GOOGLE_API_KEY: "google-test-key",
   });
 
   try {
@@ -369,9 +262,53 @@ test("isClosingOnlyMessage detects pure closing replies", () => {
   }
 });
 
+test("sanitizeAssistantOpening removes repeated laughter openings when user did not laugh", () => {
+  const { service, restore } = loadServiceWithEnv({
+    GOOGLE_API_KEY: "google-test-key",
+  });
+
+  try {
+    assert.equal(
+      service.__testables.sanitizeAssistantOpening({
+        reply: "Jaja, tengo turnos para el lunes.",
+        incomingText: "que turnos tenes para el lunes?",
+      }),
+      "tengo turnos para el lunes."
+    );
+    assert.equal(
+      service.__testables.sanitizeAssistantOpening({
+        reply: "Jaja, tengo turnos para el lunes.",
+        incomingText: "jaja, que turnos tenes para el lunes?",
+      }),
+      "Jaja, tengo turnos para el lunes."
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("ensureFriendlyFirstReply prefixes first answer with configured saludo", () => {
+  const { service, restore } = loadServiceWithEnv({
+    GOOGLE_API_KEY: "google-test-key",
+  });
+
+  try {
+    assert.equal(
+      service.__testables.ensureFriendlyFirstReply({
+        reply: "tengo turnos para el lunes a las 10 y 11.",
+        companyContext: { ownPhrases: { saludos: "amigaso" } },
+        shouldPrefixGreeting: true,
+      }),
+      "Hola, amigaso. tengo turnos para el lunes a las 10 y 11."
+    );
+  } finally {
+    restore();
+  }
+});
+
 test("shouldSilenceClosingReply only silences replies after an appointment confirmation", () => {
   const { service, restore } = loadServiceWithEnv({
-    GROQ_API_KEY: "groq-test-key",
+    GOOGLE_API_KEY: "google-test-key",
   });
 
   try {
@@ -392,9 +329,81 @@ test("shouldSilenceClosingReply only silences replies after an appointment confi
       ],
       incomingText: "Hola",
     });
+    const shouldSilenceWithoutHistory = service.__testables.shouldSilenceClosingReply({
+      lastAssistantReply:
+        "Listo, tu turno quedo confirmado para hoy lunes 31 a las 13:00. Cualquier consulta, no dudes en llamarme",
+      incomingText: "Gracias, nos vemos",
+    });
 
     assert.equal(shouldSilence, true);
     assert.equal(shouldKeepTalking, false);
+    assert.equal(shouldSilenceWithoutHistory, true);
+  } finally {
+    restore();
+  }
+});
+
+test("isAvailabilityLookupIntent detects turno and horario requests", () => {
+  const { service, restore } = loadServiceWithEnv({
+    GOOGLE_API_KEY: "google-test-key",
+  });
+
+  try {
+    assert.equal(
+      service.__testables.isAvailabilityLookupIntent("que turnos tenes para el lunes?"),
+      true,
+    );
+    assert.equal(
+      service.__testables.isAvailabilityLookupIntent("tenes horarios para maÃ±ana?"),
+      true,
+    );
+    assert.equal(
+      service.__testables.isAvailabilityLookupIntent("gracias, nos vemos"),
+      false,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("buildTemporalReferenceText includes exact today and tomorrow references", () => {
+  const { service, restore } = loadServiceWithEnv({
+    GOOGLE_API_KEY: "google-test-key",
+  });
+
+  try {
+    const realtimeContext = service.__testables.buildRealtimeTemporalContext(
+      "America/Argentina/Buenos_Aires"
+    );
+    const temporalRef = service.__testables.buildTemporalReferenceText(realtimeContext);
+    const normalizedTemporalRef = temporalRef
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+    assert.match(normalizedTemporalRef, /Hoy exacto:/);
+    assert.match(normalizedTemporalRef, /Ma.*ana exacto:/);
+    assert.match(
+      normalizedTemporalRef,
+      new RegExp(realtimeContext.localDate.replace(/[-/]/g, "[-/]"))
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("buildFinalReplyRecoveryMessages appends a final synthesis instruction", () => {
+  const { service, restore } = loadServiceWithEnv({
+    GOOGLE_API_KEY: "google-test-key",
+  });
+
+  try {
+    const messages = service.__testables.buildFinalReplyRecoveryMessages([
+      new AIMessage({ content: "" }),
+    ]);
+
+    assert.equal(messages.length, 2);
+    assert.equal(messages[1]._getType(), "human");
+    assert.match(String(messages[1].content || ""), /responde ahora al cliente/i);
   } finally {
     restore();
   }
@@ -402,7 +411,7 @@ test("shouldSilenceClosingReply only silences replies after an appointment confi
 
 test("sanitizeNonReplyOutput removes literal no-response markers", () => {
   const { service, restore } = loadServiceWithEnv({
-    GROQ_API_KEY: "groq-test-key",
+    GOOGLE_API_KEY: "google-test-key",
   });
 
   try {
@@ -419,7 +428,7 @@ test("sanitizeNonReplyOutput removes literal no-response markers", () => {
 
 test("ensureAppointmentConfirmationClosing appends the required closing phrase once", () => {
   const { service, restore } = loadServiceWithEnv({
-    GROQ_API_KEY: "groq-test-key",
+    GOOGLE_API_KEY: "google-test-key",
   });
 
   try {
@@ -438,3 +447,5 @@ test("ensureAppointmentConfirmationClosing appends the required closing phrase o
     restore();
   }
 });
+
+

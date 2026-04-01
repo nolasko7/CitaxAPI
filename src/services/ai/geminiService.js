@@ -12,8 +12,8 @@ const {
   START,
 } = require("@langchain/langgraph");
 const { ToolNode, toolsCondition } = require("@langchain/langgraph/prebuilt");
+const { ChatGoogleGenerativeAI } = require("@langchain/google-genai");
 const { z } = require("zod");
-const axios = require("axios");
 
 const {
   cancelAppointmentFromAssistant,
@@ -39,23 +39,30 @@ const {
 } = require("./slotPresentation");
 
 const AI_ENABLED = (process.env.WHATSAPP_AI_ENABLED || "true") === "true";
-const DEFAULT_PROVIDER_BASE_URLS = {
-  ollama: "http://localhost:11434/v1",
-  groq: "https://api.groq.com/openai/v1",
-  openrouter: "https://openrouter.ai/api/v1",
-};
-const DEFAULT_PROVIDER_MODELS = {
-  ollama: "llama3.2",
-  groq: "llama-3.3-70b-versatile",
-  openrouter: "openrouter/free",
+const GOOGLE_API_KEY = String(process.env.GOOGLE_API_KEY || "").trim();
+const GEMINI_MODEL = String(
+  process.env.GEMINI_MODEL || "gemini-3-flash-preview",
+).trim();
+const GEMINI_MAX_RETRIES = Number(process.env.GEMINI_MAX_RETRIES || 2);
+const GEMINI_PROVIDER_CONFIG = {
+  name: "google-genai",
+  label: `google-${GEMINI_MODEL}`,
+  model: GEMINI_MODEL,
+  apiKey: GOOGLE_API_KEY,
 };
 const LLM_TEMPERATURE = Number(process.env.LLM_TEMPERATURE || 0);
 const LLM_MAX_TOKENS = Number(process.env.LLM_MAX_TOKENS || 1200);
-const LLM_REQUEST_TIMEOUT_MS = Number(
-  process.env.LLM_REQUEST_TIMEOUT_MS || 45000,
-);
 const conversationMemory = new Map();
 const MAX_CONVERSATION_MESSAGES = 24;
+const whatsappSessionState = new Map();
+const WHATSAPP_CHAT_CONTEXT_TTL_MS =
+  Number(
+    process.env.WHATSAPP_CHAT_CONTEXT_TTL_MINUTES ||
+      process.env.WHATSAPP_SESSION_TTL_MINUTES ||
+      30,
+  ) *
+  60 *
+  1000;
 const SUPPORT_INSTANCE_NAME = String(
   process.env.SUPPORT_WHATSAPP_INSTANCE || "citax-support-whatsapp",
 )
@@ -76,136 +83,62 @@ const EVOLUTION_API_URL =
 const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY || "";
 const LAST_CANCELLED_TTL_MS = 2 * 60 * 60 * 1000;
 
-const normalizeProviderName = (value, fallback = "") => {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  return normalized || fallback;
-};
-
-const resolveOllamaOpenAiBaseUrl = (value) => {
-  const normalized = String(value || "")
-    .trim()
-    .replace(/\/$/, "");
-
-  if (!normalized) {
-    return DEFAULT_PROVIDER_BASE_URLS.ollama;
-  }
-
-  if (normalized.endsWith("/v1")) {
-    return normalized;
-  }
-
-  if (normalized.endsWith("/api")) {
-    return `${normalized.slice(0, -4)}/v1`;
-  }
-
-  return `${normalized}/v1`;
-};
-
-const getProviderApiKeyFromEnv = (providerName) => {
-  if (providerName === "ollama") {
-    return String(process.env.OLLAMA_API_KEY || "").trim();
-  }
-
-  if (providerName === "groq") {
-    return String(process.env.GROQ_API_KEY || "").trim();
-  }
-
-  if (providerName === "openrouter") {
-    return String(process.env.OPENROUTER_API_KEY || "").trim();
-  }
-
-  return "";
-};
-
-const getProviderBaseUrlFromEnv = (providerName) => {
-  if (providerName === "ollama") {
-    return resolveOllamaOpenAiBaseUrl(
-      process.env.OLLAMA_API_URL || DEFAULT_PROVIDER_BASE_URLS.ollama,
-    );
-  }
-
-  if (providerName === "groq") {
-    return String(
-      process.env.GROQ_BASE_URL || DEFAULT_PROVIDER_BASE_URLS.groq,
-    ).trim();
-  }
-
-  if (providerName === "openrouter") {
-    return String(
-      process.env.OPENROUTER_BASE_URL || DEFAULT_PROVIDER_BASE_URLS.openrouter,
-    ).trim();
-  }
-
-  return "";
-};
-
-const getProviderModelFromEnv = (providerName) => {
-  if (providerName === "ollama") {
-    return String(
-      process.env.OLLAMA_MODEL || DEFAULT_PROVIDER_MODELS.ollama,
-    ).trim();
-  }
-
-  if (providerName === "groq") {
-    return String(
-      process.env.GROQ_MODEL || DEFAULT_PROVIDER_MODELS.groq,
-    ).trim();
-  }
-
-  if (providerName === "openrouter") {
-    return String(
-      process.env.OPENROUTER_MODEL || DEFAULT_PROVIDER_MODELS.openrouter,
-    ).trim();
-  }
-
-  return "";
-};
-
-const resolveSlotProviderConfig = ({ slot, defaultProvider }) => {
-  const prefix = slot === "primary" ? "LLM_PRIMARY" : "LLM_FALLBACK";
-  const providerName = normalizeProviderName(
-    process.env[`${prefix}_PROVIDER`],
-    defaultProvider,
-  );
-  const apiKey =
-    String(process.env[`${prefix}_API_KEY`] || "").trim() ||
-    getProviderApiKeyFromEnv(providerName);
-  const baseUrl =
-    String(process.env[`${prefix}_BASE_URL`] || "").trim() ||
-    getProviderBaseUrlFromEnv(providerName) ||
-    DEFAULT_PROVIDER_BASE_URLS[providerName] ||
-    "";
-  const model =
-    String(process.env[`${prefix}_MODEL`] || "").trim() ||
-    getProviderModelFromEnv(providerName) ||
-    DEFAULT_PROVIDER_MODELS[providerName] ||
-    "";
-  const label =
-    String(process.env[`${prefix}_LABEL`] || "").trim() ||
-    `${providerName}-${model}`;
-
-  return {
-    name: providerName,
-    label,
-    apiKey,
-    baseUrl,
-    model,
-  };
-};
-
-const PRIMARY_PROVIDER_CONFIG = resolveSlotProviderConfig({
-  slot: "primary",
-  defaultProvider: "groq",
-});
-const FALLBACK_PROVIDER_CONFIG = resolveSlotProviderConfig({
-  slot: "fallback",
-  defaultProvider: "openrouter",
-});
-
 const getConversationKey = ({ instanceName, customerPhone }) =>
   `${instanceName}:${customerPhone}`;
+
+const getWhatsappSessionState = ({ instanceName, customerPhone }) => {
+  const key = getConversationKey({ instanceName, customerPhone });
+  const current = whatsappSessionState.get(key);
+
+  if (!current) {
+    return null;
+  }
+
+  if (Date.now() > current.expiresAt) {
+    whatsappSessionState.delete(key);
+    return null;
+  }
+
+  return current;
+};
+
+const setWhatsappSessionState = ({
+  instanceName,
+  customerPhone,
+  lastAssistantReply = "",
+}) => {
+  const key = getConversationKey({ instanceName, customerPhone });
+  const payload = {
+    lastAssistantReply: String(lastAssistantReply || "").trim(),
+    updatedAt: Date.now(),
+    expiresAt: Date.now() + WHATSAPP_CHAT_CONTEXT_TTL_MS,
+  };
+
+  whatsappSessionState.set(key, payload);
+  return payload;
+};
+
+const clearWhatsappSessionState = ({ instanceName, customerPhone }) => {
+  whatsappSessionState.delete(getConversationKey({ instanceName, customerPhone }));
+};
+
+const getActiveWhatsappHistory = ({ instanceName, customerPhone }) => {
+  const sessionState = getWhatsappSessionState({ instanceName, customerPhone });
+  if (!sessionState) {
+    clearConversationHistory({ instanceName, customerPhone });
+    return {
+      sessionState: {
+        lastAssistantReply: "",
+      },
+      history: [],
+    };
+  }
+
+  return {
+    sessionState,
+    history: getConversationHistory({ instanceName, customerPhone }),
+  };
+};
 
 const getConversationHistory = ({ instanceName, customerPhone }) => {
   return (
@@ -231,14 +164,19 @@ const clearConversationHistory = ({ instanceName, customerPhone }) => {
   );
 };
 
+const getGeminiConfig = () => ({
+  ...GEMINI_PROVIDER_CONFIG,
+});
+
 const isAssistantConfigured = () =>
-  AI_ENABLED &&
-  Boolean(PRIMARY_PROVIDER_CONFIG.apiKey || FALLBACK_PROVIDER_CONFIG.apiKey);
+  AI_ENABLED && Boolean(getGeminiConfig().apiKey);
 
 const buildRealtimeTemporalContext = (
   timezone = "America/Argentina/Buenos_Aires",
 ) => {
   const now = new Date();
+  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   const isoUtc = now.toISOString();
   const localDate = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
@@ -253,13 +191,59 @@ const buildRealtimeTemporalContext = (
     second: "2-digit",
     hour12: false,
   }).format(now);
+  const localDayName = new Intl.DateTimeFormat("es-AR", {
+    timeZone: timezone,
+    weekday: "long",
+  }).format(now).toLowerCase();
+  const localDateLong = new Intl.DateTimeFormat("es-AR", {
+    timeZone: timezone,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(now).toLowerCase();
+  const tomorrowDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(tomorrow);
+  const tomorrowDateLong = new Intl.DateTimeFormat("es-AR", {
+    timeZone: timezone,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(tomorrow).toLowerCase();
+  const yesterdayDateLong = new Intl.DateTimeFormat("es-AR", {
+    timeZone: timezone,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(yesterday).toLowerCase();
 
   return {
     isoUtc,
     localDate,
     localTime,
+    localDayName,
+    localDateLong,
     timezone,
+    tomorrowDate,
+    tomorrowDateLong,
+    yesterdayDateLong,
   };
+};
+
+const buildTemporalReferenceText = (realtimeContext) => {
+  return `Referencia temporal obligatoria:
+- Ahora exacto: ${realtimeContext.localDate} ${realtimeContext.localTime} (${realtimeContext.timezone})
+- Hoy exacto: ${realtimeContext.localDateLong}
+- MaÃ±ana exacto: ${realtimeContext.tomorrowDateLong}
+- Ayer exacto: ${realtimeContext.yesterdayDateLong}
+Usa esta referencia como fuente de verdad para interpretar "hoy", "maÃ±ana" y fechas relativas.
+Nunca arrastres dÃ­a, fecha u hora desde mensajes anteriores del chat.`;
 };
 
 const getSupportSession = async (customerPhone) => {
@@ -330,20 +314,6 @@ const getLastCancelledContext = (operatorPhone) => {
   return saved;
 };
 
-const getConfiguredProviders = () => {
-  const providers = [];
-
-  if (PRIMARY_PROVIDER_CONFIG.apiKey) {
-    providers.push(PRIMARY_PROVIDER_CONFIG);
-  }
-
-  if (FALLBACK_PROVIDER_CONFIG.apiKey) {
-    providers.push(FALLBACK_PROVIDER_CONFIG);
-  }
-
-  return providers;
-};
-
 const stringifyMessageContent = (content) => {
   if (typeof content === "string") {
     return content;
@@ -369,50 +339,6 @@ const stringifyMessageContent = (content) => {
   }
 
   return String(content);
-};
-
-const toOpenAIChatMessage = (message) => {
-  const type = message?._getType?.();
-  const content = stringifyMessageContent(message?.content);
-
-  if (type === "system") {
-    return { role: "system", content };
-  }
-
-  if (type === "human") {
-    return { role: "user", content };
-  }
-
-  if (type === "tool") {
-    return {
-      role: "tool",
-      tool_call_id: message.tool_call_id,
-      content,
-    };
-  }
-
-  if (type === "ai") {
-    const toolCalls = Array.isArray(message.tool_calls)
-      ? message.tool_calls
-          .filter((toolCall) => toolCall?.name)
-          .map((toolCall, index) => ({
-            id: toolCall.id || `tool_call_${index + 1}`,
-            type: "function",
-            function: {
-              name: toolCall.name,
-              arguments: JSON.stringify(toolCall.args || {}),
-            },
-          }))
-      : undefined;
-
-    return {
-      role: "assistant",
-      content,
-      ...(toolCalls?.length ? { tool_calls: toolCalls } : {}),
-    };
-  }
-
-  return { role: "user", content };
 };
 
 const safeParseToolArgs = (rawArgs) => {
@@ -560,6 +486,38 @@ const renderWelcomeMessageTemplate = ({
   return rendered;
 };
 
+const pickConfiguredSaludo = (ownPhrases = {}) => {
+  const raw = String(ownPhrases?.saludos || "").trim();
+  if (!raw) return "";
+
+  return raw
+    .split(/\r?\n|[;|]+/)
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)[0] || "";
+};
+
+const buildFriendlyGreetingPrefix = (companyContext = {}, contactName = "") => {
+  const configuredSaludo = renderWelcomeMessageTemplate({
+    template: pickConfiguredSaludo(companyContext?.ownPhrases),
+    contactName,
+  });
+
+  if (configuredSaludo) {
+    const normalizedSaludo = normalizeAssistantText(configuredSaludo);
+    if (
+      normalizedSaludo.startsWith("hola") ||
+      normalizedSaludo.startsWith("buen dia") ||
+      normalizedSaludo.startsWith("buenas")
+    ) {
+      return configuredSaludo.replace(/[.!?]+$/g, "").trim();
+    }
+
+    return `Hola, ${configuredSaludo.replace(/[.!?]+$/g, "").trim()}`;
+  }
+
+  return "Hola";
+};
+
 const getConfiguredWelcomeMessage = (
   companyContext = {},
   contactName = "",
@@ -579,6 +537,57 @@ const getConfiguredWelcomeMessage = (
       contactName,
     }) || DEFAULT_WELCOME_MESSAGE
   );
+};
+
+const LAUGHTER_OPENING_REGEX =
+  /^\s*((?:ja){2,}|jaja(?:ja+)?|jeje(?:je+)?|jojo(?:jo+)?|ajaj(?:a+)?)\s*[,;:.!-]*\s*/i;
+
+const sanitizeAssistantOpening = ({
+  reply = "",
+  incomingText = "",
+}) => {
+  const originalReply = String(reply || "").trim();
+  if (!originalReply) return "";
+
+  const normalizedIncoming = normalizeAssistantText(incomingText);
+  const incomingHasLaughter =
+    /\b(?:ja){2,}\b/.test(normalizedIncoming) ||
+    normalizedIncoming.includes("jaja") ||
+    normalizedIncoming.includes("jeje");
+
+  if (incomingHasLaughter) {
+    return originalReply;
+  }
+
+  const sanitizedReply = originalReply.replace(LAUGHTER_OPENING_REGEX, "").trim();
+  return sanitizedReply || originalReply;
+};
+
+const ensureFriendlyFirstReply = ({
+  reply = "",
+  companyContext = {},
+  contactName = "",
+  shouldPrefixGreeting = false,
+}) => {
+  const normalizedReply = normalizeAssistantText(reply);
+  if (!reply || !shouldPrefixGreeting) {
+    return String(reply || "").trim();
+  }
+
+  if (
+    normalizedReply.startsWith("hola") ||
+    normalizedReply.startsWith("buen dia") ||
+    normalizedReply.startsWith("buenas")
+  ) {
+    return String(reply || "").trim();
+  }
+
+  const greetingPrefix = buildFriendlyGreetingPrefix(companyContext, contactName);
+  if (!greetingPrefix) {
+    return String(reply || "").trim();
+  }
+
+  return `${greetingPrefix}. ${String(reply || "").trim()}`.trim();
 };
 
 const isGreetingOnlyMessage = (value) => {
@@ -642,6 +651,7 @@ const isGreetingOnlyMessage = (value) => {
 
 const shouldUseConfiguredWelcomeReply = ({
   history = [],
+  hasPriorReply,
   incomingText = "",
   welcomeMessage = "",
 }) => {
@@ -649,7 +659,10 @@ const shouldUseConfiguredWelcomeReply = ({
     return false;
   }
 
-  return history.length === 0 && isGreetingOnlyMessage(incomingText);
+  const alreadyStartedConversation =
+    typeof hasPriorReply === "boolean" ? hasPriorReply : history.length > 0;
+
+  return !alreadyStartedConversation && isGreetingOnlyMessage(incomingText);
 };
 
 const isClosingOnlyMessage = (value) => {
@@ -774,127 +787,83 @@ const sanitizeNonReplyOutput = (value) => {
   return NON_REPLY_MARKERS.has(normalizeAssistantText(reply)) ? "" : reply;
 };
 
-const shouldSilenceClosingReply = ({ history = [], incomingText = "" }) => {
+const FINAL_REPLY_RECOVERY_PROMPT =
+  "Con toda la informacion y resultados de herramientas anteriores, responde ahora al cliente con un mensaje final breve en español rioplatense. No llames herramientas, no expliques pasos internos y no dejes la respuesta vacia.";
+
+const shouldSilenceClosingReply = ({
+  history = [],
+  lastAssistantReply = "",
+  incomingText = "",
+}) => {
   if (!isClosingOnlyMessage(incomingText)) {
     return false;
   }
 
-  const { reply } = extractAssistantReplyFromMessages(history);
+  const reply =
+    String(lastAssistantReply || "").trim() ||
+    extractAssistantReplyFromMessages(history).reply;
   return looksLikeAppointmentConfirmation(reply);
 };
 
-const toLangChainAIMessage = (responseData) => {
-  const choice = responseData?.choices?.[0]?.message || {};
-  const toolCalls = [];
-  const invalidToolCalls = [];
+const isAvailabilityLookupIntent = (value) => {
+  const normalized = normalizeAssistantText(value);
+  if (!normalized) return false;
 
-  for (const toolCall of choice.tool_calls || []) {
-    const name = toolCall?.function?.name;
-    const argsText = toolCall?.function?.arguments || "{}";
+  const directKeywords = [
+    "turno",
+    "turnos",
+    "horario",
+    "horarios",
+    "disponibilidad",
+    "disponible",
+    "agenda",
+    "reserv",
+    "sacar",
+  ];
 
-    if (!name) {
-      invalidToolCalls.push({
-        id: toolCall?.id,
-        args: argsText,
-        error: "Tool call sin nombre.",
-      });
-      continue;
-    }
-
-    const parsedArgs = safeParseToolArgs(argsText);
-    if (parsedArgs?.__parseError) {
-      invalidToolCalls.push({
-        id: toolCall?.id,
-        name,
-        args: argsText,
-        error: parsedArgs.__parseError,
-      });
-      continue;
-    }
-
-    toolCalls.push({
-      id: toolCall?.id,
-      name,
-      args: parsedArgs,
-    });
+  if (directKeywords.some((keyword) => normalized.includes(keyword))) {
+    return true;
   }
 
-  const inlineToolData = parseInlineToolCallsFromContent(choice.content || "");
-  toolCalls.push(...inlineToolData.toolCalls);
-  invalidToolCalls.push(...inlineToolData.invalidToolCalls);
-
-  return new AIMessage({
-    content: inlineToolData.content,
-    tool_calls: toolCalls,
-    invalid_tool_calls: invalidToolCalls,
-    response_metadata: {
-      provider: responseData?.provider || null,
-      model: responseData?.model || null,
-      finish_reason: responseData?.choices?.[0]?.finish_reason || null,
-    },
-    usage_metadata: responseData?.usage
-      ? {
-          input_tokens: responseData.usage.prompt_tokens || 0,
-          output_tokens: responseData.usage.completion_tokens || 0,
-          total_tokens: responseData.usage.total_tokens || 0,
-        }
-      : undefined,
-  });
+  return (
+    normalized.includes("tenes para") ||
+    normalized.includes("tienes para") ||
+    normalized.includes("hay lugar") ||
+    normalized.includes("hay algun") ||
+    normalized.includes("que tenes para") ||
+    normalized.includes("que me ofreces para")
+  );
 };
 
-const buildProviderHeaders = (provider) => {
-  const headers = {
-    "Content-Type": "application/json",
+const createGeminiModel = () => {
+  const config = getGeminiConfig();
+  const modelOptions = {
+    apiKey: config.apiKey,
+    model: config.model,
+    temperature: LLM_TEMPERATURE,
+    maxRetries: GEMINI_MAX_RETRIES,
   };
 
-  if (provider.apiKey) {
-    headers.Authorization = `Bearer ${provider.apiKey}`;
+  if (Number.isFinite(LLM_MAX_TOKENS) && LLM_MAX_TOKENS > 0) {
+    modelOptions.maxOutputTokens = LLM_MAX_TOKENS;
   }
 
-  if (provider.name === "openrouter") {
-    headers["X-Title"] = process.env.OPENROUTER_APP_NAME || "CitaxAPI";
-    if (process.env.OPENROUTER_HTTP_REFERER) {
-      headers["HTTP-Referer"] = process.env.OPENROUTER_HTTP_REFERER;
-    }
-  }
-
-  return headers;
+  return new ChatGoogleGenerativeAI(modelOptions);
 };
 
-const createModel = (provider) => {
-  return {
-    bindTools(toolDefinitions = []) {
-      return {
-        invoke: async (messages) => {
-          const payload = {
-            model: provider.model,
-            messages: messages.map(toOpenAIChatMessage),
-            temperature: LLM_TEMPERATURE,
-            max_tokens: LLM_MAX_TOKENS,
-          };
+const buildFinalReplyRecoveryMessages = (messages = []) => {
+  return [
+    ...(Array.isArray(messages) ? messages : []),
+    new HumanMessage(FINAL_REPLY_RECOVERY_PROMPT),
+  ];
+};
 
-          if (toolDefinitions.length) {
-            payload.tools = toolDefinitions;
-            payload.tool_choice = "auto";
-          }
-
-          const response = await axios.post(
-            `${String(provider.baseUrl || "").replace(/\/$/, "")}/chat/completions`,
-            payload,
-            {
-              headers: buildProviderHeaders(provider),
-              timeout: LLM_REQUEST_TIMEOUT_MS,
-            },
-          );
-
-          return toLangChainAIMessage({
-            ...response.data,
-            provider: provider.label,
-          });
-        },
-      };
-    },
-  };
+const synthesizeFinalReplyFromMessages = async ({ messages }) => {
+  const recoveryResponse = await createGeminiModel().invoke(
+    buildFinalReplyRecoveryMessages(messages),
+  );
+  const { reply } = extractAssistantReplyFromMessages([recoveryResponse]);
+  return sanitizeNonReplyOutput(reply);
 };
 
 const resolvePreferredContactName = (rawName) => {
@@ -921,7 +890,7 @@ const createTools = ({ companyContext, customerPhone }) => {
             // Solo proveemos metadata principal.
             // Para conocer la disponibilidad real, Gemini DEBE llamar a find_available_slots.
             requisito:
-              "Para saber si este prestador atiende un dÃƒÂ­a u horario, DEBES usar obligatoriamente la herramienta find_available_slots. NO asumas ningÃƒÂºn horario comercial.",
+              "Para saber si este prestador atiende un dÃƒÆ’Ã‚Â­a u horario, DEBES usar obligatoriamente la herramienta find_available_slots. NO asumas ningÃƒÆ’Ã‚Âºn horario comercial.",
           })),
           services: companyContext.services,
         });
@@ -977,7 +946,7 @@ const createTools = ({ companyContext, customerPhone }) => {
             .number()
             .optional()
             .default(30)
-            .describe("MÃƒÂ¡ximo de resultados (1-40)."),
+            .describe("MÃƒÆ’Ã‚Â¡ximo de resultados (1-40)."),
         }),
       },
     ),
@@ -1014,11 +983,11 @@ const createTools = ({ companyContext, customerPhone }) => {
       {
         name: "create_appointment",
         description:
-          "Crea un turno confirmado. Solo usar cuando el cliente ya confirmÃƒÂ³.",
+          "Crea un turno confirmado. Solo usar cuando el cliente ya confirmÃƒÆ’Ã‚Â³.",
         schema: z.object({
           clientName: z
             .string()
-            .describe("Nombre del cliente (mÃƒÂ­nimo 3 caracteres)."),
+            .describe("Nombre del cliente (mÃƒÆ’Ã‚Â­nimo 3 caracteres)."),
           professionalId: z.number().describe("ID del prestador."),
           serviceId: z
             .number()
@@ -1042,7 +1011,7 @@ const createTools = ({ companyContext, customerPhone }) => {
       },
       {
         name: "get_appointments_by_day",
-        description: "Lista los turnos reservados para un dÃƒÂ­a especÃƒÂ­fico.",
+        description: "Lista los turnos reservados para un dÃƒÆ’Ã‚Â­a especÃƒÆ’Ã‚Â­fico.",
         schema: z.object({
           date: z
             .string()
@@ -1062,7 +1031,7 @@ const createTools = ({ companyContext, customerPhone }) => {
         });
 
         if (result.status === "multiple_found") {
-          return `EncontrÃƒÂ© varios turnos. Ã‚Â¿CuÃƒÂ¡l querÃƒÂ©s cancelar?\n${result.appointments.map((a) => `- ${a.date} a las ${a.time}`).join("\n")}`;
+          return `EncontrÃƒÆ’Ã‚Â© varios turnos. Ãƒâ€šÃ‚Â¿CuÃƒÆ’Ã‚Â¡l querÃƒÆ’Ã‚Â©s cancelar?\n${result.appointments.map((a) => `- ${a.date} a las ${a.time}`).join("\n")}`;
         }
         return `Turno del ${result.date} a las ${result.time} cancelado exitosamente.`;
       },
@@ -1078,7 +1047,12 @@ const createTools = ({ companyContext, customerPhone }) => {
   ];
 };
 
-const createSupportTools = ({ customerPhone, supportState }) => {
+const createSupportTools = ({
+  customerPhone,
+  supportState,
+  referenceDate,
+  timezone = "America/Argentina/Buenos_Aires",
+}) => {
   return [
     tool(
       async ({ email, password }) => {
@@ -1086,7 +1060,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
         if (!authResult) {
           return JSON.stringify({
             success: false,
-            error: "Credenciales invÃƒÂ¡lidas.",
+            error: "Credenciales invÃƒÆ’Ã‚Â¡lidas.",
           });
         }
         await setSupportSession({
@@ -1121,17 +1095,17 @@ const createSupportTools = ({ customerPhone, supportState }) => {
       {
         name: "login_empresa",
         description:
-          "Valida email y contraseÃƒÂ±a de empresa para asociar esta conversaciÃƒÂ³n.",
+          "Valida email y contraseÃƒÆ’Ã‚Â±a de empresa para asociar esta conversaciÃƒÆ’Ã‚Â³n.",
         schema: z.object({
           email: z.string().describe("Email de acceso de la empresa."),
-          password: z.string().describe("ContraseÃƒÂ±a de acceso de la empresa."),
+          password: z.string().describe("ContraseÃƒÆ’Ã‚Â±a de acceso de la empresa."),
         }),
       },
     ),
     tool(
       async ({ professionalName, serviceId, startDate, endDate, limit }) => {
         if (!supportState.companyId) {
-          throw new Error("Primero ejecutÃƒÂ¡ login_empresa.");
+          throw new Error("Primero ejecutÃƒÆ’Ã‚Â¡ login_empresa.");
         }
         const slots = await listAvailableSlots({
           companyId: supportState.companyId,
@@ -1139,13 +1113,13 @@ const createSupportTools = ({ customerPhone, supportState }) => {
           serviceId: serviceId || null,
           startDate,
           endDate,
-          referenceDate: new Date().toISOString().slice(0, 10),
+          referenceDate,
           limit: limit || 30,
         });
         const groupedSlots = summarizeAvailableSlotsForAssistant({
           slots,
-          referenceDate: new Date().toISOString().slice(0, 10),
-          timezone: "America/Argentina/Buenos_Aires",
+          referenceDate,
+          timezone,
         });
         return JSON.stringify({
           groupedSlots,
@@ -1175,7 +1149,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
         time,
       }) => {
         if (!supportState.companyId) {
-          throw new Error("Primero ejecutÃƒÂ¡ login_empresa.");
+          throw new Error("Primero ejecutÃƒÆ’Ã‚Â¡ login_empresa.");
         }
         const normalizedClientPhone = String(clientPhone || "")
           .replace(/[^\d]/g, "")
@@ -1188,15 +1162,15 @@ const createSupportTools = ({ customerPhone, supportState }) => {
           serviceId: serviceId || null,
           date,
           time,
-          referenceDate: new Date().toISOString().slice(0, 10),
+          referenceDate,
         });
         return JSON.stringify({
           appointment: {
             ...appointment,
             humanDate: formatNaturalDate({
               date: appointment.date,
-              referenceDate: new Date().toISOString().slice(0, 10),
-              timezone: "America/Argentina/Buenos_Aires",
+              referenceDate,
+              timezone,
             }),
           },
         });
@@ -1222,25 +1196,25 @@ const createSupportTools = ({ customerPhone, supportState }) => {
     tool(
       async ({ date }) => {
         if (!supportState.companyId) {
-          throw new Error("Primero ejecutÃƒÂ¡ login_empresa.");
+          throw new Error("Primero ejecutÃƒÆ’Ã‚Â¡ login_empresa.");
         }
         const appointments = await listAppointmentsByDay({
           companyId: supportState.companyId,
           date,
-          referenceDate: new Date().toISOString().slice(0, 10),
+          referenceDate,
         });
         return JSON.stringify({ appointments });
       },
       {
         name: "get_appointments_by_day",
-        description: "Lista turnos del dÃƒÂ­a de la empresa autenticada.",
+        description: "Lista turnos del dÃƒÆ’Ã‚Â­a de la empresa autenticada.",
         schema: z.object({ date: z.string().optional() }),
       },
     ),
     tool(
       async ({ date, time, professionalName, clientName }) => {
         if (!supportState.companyId) {
-          throw new Error("Primero ejecutÃƒÂ¡ login_empresa.");
+          throw new Error("Primero ejecutÃƒÆ’Ã‚Â¡ login_empresa.");
         }
         const result = await cancelAppointmentByCompanyFromAssistant({
           companyId: supportState.companyId,
@@ -1248,7 +1222,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
           time,
           professionalName,
           clientName,
-          referenceDate: new Date().toISOString().slice(0, 10),
+          referenceDate,
         });
         if (result?.status === "cancelled") {
           const cancelledPayload = {
@@ -1291,7 +1265,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
           return JSON.stringify({
             success: false,
             error:
-              "No encontrÃƒÂ© un telÃƒÂ©fono destino para avisar (cliente cancelado o SUPPORT_NOTIFY_PHONE).",
+              "No encontrÃƒÆ’Ã‚Â© un telÃƒÆ’Ã‚Â©fono destino para avisar (cliente cancelado o SUPPORT_NOTIFY_PHONE).",
           });
         }
         const resolvedDate = date || last.date || "sin fecha";
@@ -1332,13 +1306,13 @@ const createSupportTools = ({ customerPhone, supportState }) => {
           const details = error.response?.data || null;
           console.error(`\n==============================================`);
           console.error(
-            "Ã¢ÂÅ’ ERROR CRÃƒÂTICO - enviando aviso de cancelaciÃƒÂ³n al cliente",
+            "ÃƒÂ¢Ã‚ÂÃ…â€™ ERROR CRÃƒÆ’Ã‚ÂTICO - enviando aviso de cancelaciÃƒÆ’Ã‚Â³n al cliente",
           );
           console.error(
             "  Desde instancia de la empresa:",
             companyInstanceName,
           );
-          console.error("  TelÃƒÂ©fono destino:", targetPhone);
+          console.error("  TelÃƒÆ’Ã‚Â©fono destino:", targetPhone);
           console.error("  Texto:", text);
           console.error("  Status HTTP:", error.response?.status || "N/A");
           console.error("  Mensaje error NATIVO:", error.message);
@@ -1358,7 +1332,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
       {
         name: "notify_cancellation_contact",
         description:
-          "EnvÃƒÂ­a aviso al contacto de notificaciÃƒÂ³n cuando se confirma una cancelaciÃƒÂ³n.",
+          "EnvÃƒÆ’Ã‚Â­a aviso al contacto de notificaciÃƒÆ’Ã‚Â³n cuando se confirma una cancelaciÃƒÆ’Ã‚Â³n.",
         schema: z.object({
           date: z.string().optional(),
           time: z.string().optional(),
@@ -1368,7 +1342,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
             .string()
             .optional()
             .describe(
-              "TelÃƒÂ©fono destino opcional; si no se envÃƒÂ­a, usa el cliente cancelado.",
+              "TelÃƒÆ’Ã‚Â©fono destino opcional; si no se envÃƒÆ’Ã‚Â­a, usa el cliente cancelado.",
             ),
         }),
       },
@@ -1376,202 +1350,8 @@ const createSupportTools = ({ customerPhone, supportState }) => {
   ];
 };
 
-// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ OpenAI-compatible tool definitions for Groq / OpenRouter Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
-const TOOL_DEFINITIONS_BY_NAME = {
-  login_empresa: {
-    type: "function",
-    function: {
-      name: "login_empresa",
-      description:
-        "Valida email y contraseÃƒÂ±a de empresa para asociar esta conversaciÃƒÂ³n.",
-      parameters: {
-        type: "object",
-        properties: {
-          email: {
-            type: "string",
-            description: "Email de acceso de la empresa.",
-          },
-          password: {
-            type: "string",
-            description: "ContraseÃƒÂ±a de acceso de la empresa.",
-          },
-        },
-        required: ["email", "password"],
-      },
-    },
-  },
-  get_company_context: {
-    type: "function",
-    function: {
-      name: "get_company_context",
-      description:
-        "Devuelve el contexto del negocio: prestadores, servicios y datos.",
-      parameters: {
-        type: "object",
-        properties: {},
-        required: [],
-      },
-    },
-  },
-  find_available_slots: {
-    type: "function",
-    function: {
-      name: "find_available_slots",
-      description:
-        "Busca horarios disponibles para un prestador en un rango de fechas.",
-      parameters: {
-        type: "object",
-        properties: {
-          professionalName: {
-            type: "string",
-            description: "Nombre del prestador.",
-          },
-          serviceId: {
-            type: "number",
-            description: "ID del servicio para respetar la duracion real.",
-          },
-          startDate: {
-            type: "string",
-            description: "Fecha desde en formato YYYY-MM-DD.",
-          },
-          endDate: {
-            type: "string",
-            description: "Fecha hasta en formato YYYY-MM-DD.",
-          },
-          limit: {
-            type: "number",
-            description: "MÃƒÂ¡ximo de resultados (1-40).",
-          },
-        },
-        required: [],
-      },
-    },
-  },
-  create_appointment: {
-    type: "function",
-    function: {
-      name: "create_appointment",
-      description:
-        "Crea un turno confirmado. Solo usar cuando el cliente ya confirmÃƒÂ³.",
-      parameters: {
-        type: "object",
-        properties: {
-          clientName: {
-            type: "string",
-            description: "Nombre del cliente (mÃƒÂ­nimo 3 caracteres).",
-          },
-          clientPhone: {
-            type: "string",
-            description:
-              "Telefono real del cliente en formato internacional, si lo tenes.",
-          },
-          professionalId: {
-            type: "number",
-            description: "ID del prestador.",
-          },
-          serviceId: {
-            type: "number",
-            description:
-              "ID del servicio (si se omite se usa el primero disponible).",
-          },
-          date: {
-            type: "string",
-            description: "Fecha del turno (YYYY-MM-DD).",
-          },
-          time: {
-            type: "string",
-            description: "Hora de inicio (HH:mm).",
-          },
-        },
-        required: ["clientName", "professionalId", "date", "time"],
-      },
-    },
-  },
-  get_appointments_by_day: {
-    type: "function",
-    function: {
-      name: "get_appointments_by_day",
-      description: "Lista los turnos reservados para un dÃƒÂ­a especÃƒÂ­fico.",
-      parameters: {
-        type: "object",
-        properties: {
-          date: {
-            type: "string",
-            description: "Fecha a consultar en formato YYYY-MM-DD.",
-          },
-        },
-        required: [],
-      },
-    },
-  },
-  cancel_appointment: {
-    type: "function",
-    function: {
-      name: "cancel_appointment",
-      description: "Cancela un turno existente.",
-      parameters: {
-        type: "object",
-        properties: {
-          date: {
-            type: "string",
-            description: "Fecha del turno (YYYY-MM-DD).",
-          },
-          time: {
-            type: "string",
-            description: "Hora del turno (HH:mm).",
-          },
-          professionalName: {
-            type: "string",
-            description: "Nombre del profesional.",
-          },
-          clientName: {
-            type: "string",
-            description: "Nombre del cliente.",
-          },
-          phone: {
-            type: "string",
-            description: "TelÃƒÂ©fono destino opcional para avisos.",
-          },
-        },
-        required: [],
-      },
-    },
-  },
-  notify_cancellation_contact: {
-    type: "function",
-    function: {
-      name: "notify_cancellation_contact",
-      description:
-        "EnvÃƒÂ­a aviso al contacto configurado sobre una cancelaciÃƒÂ³n confirmada.",
-      parameters: {
-        type: "object",
-        properties: {
-          date: { type: "string" },
-          time: { type: "string" },
-          professionalName: { type: "string" },
-          clientName: { type: "string" },
-          phone: { type: "string" },
-        },
-        required: [],
-      },
-    },
-  },
-};
-
-const getToolDefinitions = (tools) => {
-  const names = new Set(
-    (tools || []).map((candidate) => candidate?.name).filter(Boolean),
-  );
-
-  return [...names]
-    .map((name) => TOOL_DEFINITIONS_BY_NAME[name])
-    .filter(Boolean);
-};
-
-const createGraph = ({ provider, tools }) => {
-  const modelWithTools = createModel(provider).bindTools(
-    getToolDefinitions(tools),
-  );
+const createGraph = ({ tools }) => {
+  const modelWithTools = createGeminiModel().bindTools(tools || []);
   const toolNode = new ToolNode(tools);
 
   const callModel = async (state) => {
@@ -1588,36 +1368,45 @@ const createGraph = ({ provider, tools }) => {
     .compile();
 };
 
-const invokeGraphWithFallback = async ({ tools, messages }) => {
-  const providers = getConfiguredProviders();
-  let lastError = null;
+const invokeGeminiGraph = async ({ tools, messages }) => {
+  const provider = getGeminiConfig();
 
-  for (const provider of providers) {
-    try {
-      const graph = createGraph({ provider, tools });
-      const result = await graph.invoke({ messages });
-      const { reply } = extractAssistantReplyFromMessages(result.messages);
+  try {
+    const graph = createGraph({ tools });
+    const result = await graph.invoke({ messages });
+    const { reply } = extractAssistantReplyFromMessages(result.messages);
 
-      if (!reply) {
-        const emptyReplyError = new Error(
-          "El proveedor terminÃƒÂ³ el flujo sin respuesta final.",
-        );
-        emptyReplyError.code = "empty_final_reply";
-        throw emptyReplyError;
+    if (!reply) {
+      const recoveredReply = await synthesizeFinalReplyFromMessages({
+        messages: result.messages,
+      });
+
+      if (recoveredReply) {
+        return {
+          result: {
+            ...result,
+            messages: [...result.messages, new AIMessage(recoveredReply)],
+          },
+          provider,
+        };
       }
 
-      return { result, provider };
-    } catch (error) {
-      lastError = error;
-      console.error(`Ã¢ÂÅ’ Error ejecutando proveedor LLM (${provider.label}):`, {
-        message: error.message,
-        status: error.response?.status,
-        data: error.response?.data || null,
-      });
+      const emptyReplyError = new Error(
+        "Gemini termino el flujo sin respuesta final.",
+      );
+      emptyReplyError.code = "empty_final_reply";
+      throw emptyReplyError;
     }
-  }
 
-  throw lastError || new Error("No hay proveedores LLM configurados.");
+    return { result, provider };
+  } catch (error) {
+    console.error(`❌ Error ejecutando LLM Gemini (${provider.label}):`, {
+      message: error.message,
+      status: error.response?.status || error.status,
+      data: error.response?.data || error.errorDetails || null,
+    });
+    throw error;
+  }
 };
 
 const runWhatsappAssistant = async ({
@@ -1629,7 +1418,7 @@ const runWhatsappAssistant = async ({
     return {
       enabled: false,
       reason:
-        "LLM no configurada. DefinÃƒÂ­ la API key del proveedor primario o secundario, o deshabilitÃƒÂ¡ la IA.",
+        "Gemini no configurado. Defini GOOGLE_API_KEY en el .env o deshabilita la IA.",
     };
   }
 
@@ -1657,7 +1446,7 @@ const runWhatsappAssistant = async ({
         customerPhone,
       );
     } catch (error) {
-      console.error("Ã¢ÂÅ’ Error cargando contexto:", error.message);
+      console.error("ÃƒÂ¢Ã‚ÂÃ…â€™ Error cargando contexto:", error.message);
       return {
         enabled: false,
         reason: "Error cargando contexto de la empresa.",
@@ -1672,35 +1461,56 @@ const runWhatsappAssistant = async ({
     };
   }
 
+  const { sessionState, history } = getActiveWhatsappHistory({
+    instanceName,
+    customerPhone,
+  });
   const preferredName = resolvePreferredContactName(incomingMessage?.pushName);
   const welcomeReply = getConfiguredWelcomeMessage(companyContext, preferredName);
-  const tools = createTools({ companyContext, customerPhone });
   const realtimeContext = buildRealtimeTemporalContext(companyContext.timezone);
-  const systemPrompt = buildAssistantPrompt({
+  const effectiveCompanyContext = {
     ...companyContext,
+    currentDate: realtimeContext.localDate,
+    currentDayName: realtimeContext.localDayName,
+    currentTime: realtimeContext.localTime,
+  };
+  const tools = createTools({
+    companyContext: effectiveCompanyContext,
+    customerPhone,
+  });
+  const systemPrompt = buildAssistantPrompt({
+    ...effectiveCompanyContext,
     welcomeMessage: welcomeReply,
     currentDate: realtimeContext.localDate,
     currentTime: realtimeContext.localTime,
   });
-  const temporalRef = `Referencia temporal obligatoria: fecha local actual ${realtimeContext.localDate}, hora local ${realtimeContext.localTime}, zona ${realtimeContext.timezone}, timestamp UTC ${realtimeContext.isoUtc}. UsÃƒÂ¡ esta referencia como fuente de verdad para interpretar "hoy", "maÃƒÂ±ana" y fechas relativas.`;
+  const temporalRef = buildTemporalReferenceText(realtimeContext);
   const contactRef = preferredName
     ? `Este cliente figura como '${preferredName}' en WhatsApp.`
-    : "No hay nombre de contacto disponible, usÃƒÂ¡ trato neutro.";
-  const phoneRef = `TelÃƒÂ©fono del cliente (no lo pidas): ${customerPhone}.`;
+    : "No hay nombre de contacto disponible, usa trato neutro.";
+  const phoneRef = `Telefono del cliente (no lo pidas): ${customerPhone}.`;
+  const availabilityGuardRef = isAvailabilityLookupIntent(messageText)
+    ? 'En este mensaje el cliente esta pidiendo turnos, horarios o disponibilidad. Antes de responder, debes ejecutar find_available_slots en esta misma interaccion y responder solo con ese resultado actualizado.'
+    : "";
 
-  const history = getConversationHistory({ instanceName, customerPhone });
-  if (shouldSilenceClosingReply({ history, incomingText: messageText })) {
+  if (
+    shouldSilenceClosingReply({
+      lastAssistantReply: sessionState.lastAssistantReply,
+      incomingText: messageText,
+    })
+  ) {
+    clearWhatsappSessionState({ instanceName, customerPhone });
     clearConversationHistory({ instanceName, customerPhone });
     return {
       enabled: false,
       reason: "Cierre conversacional tras confirmacion del turno.",
-      companyContext,
+      companyContext: effectiveCompanyContext,
     };
   }
 
   if (
     shouldUseConfiguredWelcomeReply({
-      history,
+      hasPriorReply: Boolean(sessionState.lastAssistantReply),
       incomingText: messageText,
       welcomeMessage: welcomeReply,
     })
@@ -1711,6 +1521,11 @@ const runWhatsappAssistant = async ({
       new AIMessage(welcomeReply),
     ];
 
+    setWhatsappSessionState({
+      instanceName,
+      customerPhone,
+      lastAssistantReply: welcomeReply,
+    });
     setConversationHistory({
       instanceName,
       customerPhone,
@@ -1720,42 +1535,58 @@ const runWhatsappAssistant = async ({
     return {
       enabled: true,
       text: welcomeReply,
-      companyContext,
+      companyContext: effectiveCompanyContext,
     };
   }
-  const { result, provider } = await invokeGraphWithFallback({
+
+  const { result, provider } = await invokeGeminiGraph({
     tools,
     messages: [
       new SystemMessage(
-        `${systemPrompt}\n\n${temporalRef}\n\n${contactRef}\n\n${phoneRef}`,
+        `${systemPrompt}\n\n${temporalRef}\n\n${contactRef}\n\n${phoneRef}${availabilityGuardRef ? `\n\n${availabilityGuardRef}` : ""}`,
       ),
       ...history,
       new HumanMessage(messageText),
     ],
   });
 
-  console.log("Ã°Å¸Â¤â€“ Graph invoke:", {
+  console.log("Graph invoke:", {
     instanceName,
     customerPhone,
     provider: provider.label,
     model: provider.model,
     historyLen: history.length,
+    stateless: false,
     resultMessages: result.messages?.length || 0,
   });
 
   const { reply } = extractAssistantReplyFromMessages(result.messages);
+  const hadPriorReply = Boolean(sessionState.lastAssistantReply);
   const finalReply = sanitizeNonReplyOutput(
-    ensureAppointmentConfirmationClosing(reply),
+    ensureFriendlyFirstReply({
+      reply: sanitizeAssistantOpening({
+        reply: ensureAppointmentConfirmationClosing(reply),
+        incomingText: messageText,
+      }),
+      companyContext: effectiveCompanyContext,
+      contactName: preferredName,
+      shouldPrefixGreeting: !hadPriorReply,
+    }),
   );
 
   if (!finalReply) {
     return {
       enabled: false,
-      reason: "El asistente decidiÃƒÂ³ no responder.",
-      companyContext,
+      reason: "El asistente decidio no responder.",
+      companyContext: effectiveCompanyContext,
     };
   }
 
+  setWhatsappSessionState({
+    instanceName,
+    customerPhone,
+    lastAssistantReply: finalReply,
+  });
   setConversationHistory({
     instanceName,
     customerPhone,
@@ -1765,7 +1596,7 @@ const runWhatsappAssistant = async ({
   return {
     enabled: true,
     text: finalReply,
-    companyContext,
+    companyContext: effectiveCompanyContext,
   };
 };
 
@@ -1798,15 +1629,19 @@ const runSupportAssistant = async ({ incomingMessage }) => {
       ).catch(() => null)
     : null;
 
-  const tools = createSupportTools({ customerPhone, supportState });
+  const realtimeContext = buildRealtimeTemporalContext(
+    "America/Argentina/Buenos_Aires",
+  );
+  const tools = createSupportTools({
+    customerPhone,
+    supportState,
+    referenceDate: realtimeContext.localDate,
+    timezone: realtimeContext.timezone,
+  });
   const history = getConversationHistory({
     instanceName: SUPPORT_INSTANCE_NAME,
     customerPhone,
   });
-
-  const realtimeContext = buildRealtimeTemporalContext(
-    "America/Argentina/Buenos_Aires",
-  );
   const supportProfessionalsRef = supportCompanyContext?.professionals?.length
     ? `Prestadores activos de la empresa autenticada: ${supportCompanyContext.professionals
         .map((professional) => {
@@ -1823,24 +1658,24 @@ const runSupportAssistant = async ({ incomingMessage }) => {
       ? `Hay exactamente un solo prestador activo en esta empresa: ${supportCompanyContext.professionals[0].name} (ID ${supportCompanyContext.professionals[0].id}). Si te piden agendar un turno, NO preguntes con que profesional. Asumi ese prestador automaticamente para buscar disponibilidad y para crear el turno.`
       : "Si hay mas de un prestador activo y el cliente no especifico cual quiere, ahi si pedi o inferi el prestador correcto antes de crear el turno.";
   const supportPrompt = `Sos el bot de soporte de Citax por WhatsApp.
-Si la conversaciÃƒÂ³n no tiene empresa autenticada, pedÃƒÂ­ email y contraseÃƒÂ±a de forma clara.
-Cuando tengas email y contraseÃƒÂ±a, ejecutÃƒÂ¡ la tool login_empresa.
+Si la conversaciÃƒÆ’Ã‚Â³n no tiene empresa autenticada, pedÃƒÆ’Ã‚Â­ email y contraseÃƒÆ’Ã‚Â±a de forma clara.
+Cuando tengas email y contraseÃƒÆ’Ã‚Â±a, ejecutÃƒÆ’Ã‚Â¡ la tool login_empresa.
 No digas que el login fue exitoso sin ejecutar la tool.
-DespuÃƒÂ©s del login, podÃƒÂ©s ayudar con: agendar turno, cancelar turno y ver agenda del dÃƒÂ­a usando tools.
+DespuÃƒÆ’Ã‚Â©s del login, podÃƒÆ’Ã‚Â©s ayudar con: agendar turno, cancelar turno y ver agenda del dÃƒÆ’Ã‚Â­a usando tools.
 ${singleSupportProviderRule}
 Si vas a agendar un turno para un cliente de la empresa, con el nombre del cliente alcanza para crear el turno.
-Solo pedÃƒÂ­ telefono del cliente si realmente hace falta como dato adicional o si la empresa quiere dejarlo asociado.
-Nunca uses el numero de WhatsApp del operador que estÃƒÂ¡ hablando con soporte como telefono del cliente, salvo que te digan explÃƒÂ­citamente que el turno es para ese mismo numero.
-Cuando canceles un turno y la cancelaciÃƒÂ³n sea exitosa, preguntÃƒÂ¡ explÃƒÂ­citamente: "Ã‚Â¿QuerÃƒÂ©s que le avise al cliente?".
-Si te responden que sÃƒÂ­, ejecutÃƒÂ¡ notify_cancellation_contact.
-Primero intentÃƒÂ¡ avisar al cliente del turno cancelado; si no hay telÃƒÂ©fono de cliente, usÃƒÂ¡ el contacto general (${SUPPORT_NOTIFY_LABEL}) si estÃƒÂ¡ configurado.
-Nunca confirmes que se enviÃƒÂ³ un aviso si la tool devuelve success=false.
-RespondÃƒÂ© en espaÃƒÂ±ol, corto y claro, estilo WhatsApp.
+Solo pedÃƒÆ’Ã‚Â­ telefono del cliente si realmente hace falta como dato adicional o si la empresa quiere dejarlo asociado.
+Nunca uses el numero de WhatsApp del operador que estÃƒÆ’Ã‚Â¡ hablando con soporte como telefono del cliente, salvo que te digan explÃƒÆ’Ã‚Â­citamente que el turno es para ese mismo numero.
+Cuando canceles un turno y la cancelaciÃƒÆ’Ã‚Â³n sea exitosa, preguntÃƒÆ’Ã‚Â¡ explÃƒÆ’Ã‚Â­citamente: "Ãƒâ€šÃ‚Â¿QuerÃƒÆ’Ã‚Â©s que le avise al cliente?".
+Si te responden que sÃƒÆ’Ã‚Â­, ejecutÃƒÆ’Ã‚Â¡ notify_cancellation_contact.
+Primero intentÃƒÆ’Ã‚Â¡ avisar al cliente del turno cancelado; si no hay telÃƒÆ’Ã‚Â©fono de cliente, usÃƒÆ’Ã‚Â¡ el contacto general (${SUPPORT_NOTIFY_LABEL}) si estÃƒÆ’Ã‚Â¡ configurado.
+Nunca confirmes que se enviÃƒÆ’Ã‚Â³ un aviso si la tool devuelve success=false.
+RespondÃƒÆ’Ã‚Â© en espaÃƒÆ’Ã‚Â±ol, corto y claro, estilo WhatsApp.
 Empresa autenticada actual: ${supportState.companyName || "ninguna"}.
 ${supportProfessionalsRef}
-Referencia temporal obligatoria: fecha local actual ${realtimeContext.localDate}, hora local ${realtimeContext.localTime}, zona ${realtimeContext.timezone}, timestamp UTC ${realtimeContext.isoUtc}.`;
+${buildTemporalReferenceText(realtimeContext)}`;
 
-  const { result, provider } = await invokeGraphWithFallback({
+  const { result, provider } = await invokeGeminiGraph({
     tools,
     messages: [
       new SystemMessage(supportPrompt),
@@ -1849,7 +1684,7 @@ Referencia temporal obligatoria: fecha local actual ${realtimeContext.localDate}
     ],
   });
 
-  console.log("Ã°Å¸Â¤â€“ Support graph invoke:", {
+  console.log("ÃƒÂ°Ã…Â¸Ã‚Â¤Ã¢â‚¬â€œ Support graph invoke:", {
     customerPhone,
     provider: provider.label,
     model: provider.model,
@@ -1883,9 +1718,8 @@ module.exports = {
   runWhatsappAssistant,
   runSupportAssistant,
   __testables: {
-    getConfiguredProviders,
+    getGeminiConfig,
     getConfiguredWelcomeMessage,
-    getToolDefinitions,
     extractAssistantReplyFromMessages,
     isClosingOnlyMessage,
     isGreetingOnlyMessage,
@@ -1894,10 +1728,15 @@ module.exports = {
     sanitizeNonReplyOutput,
     shouldSilenceClosingReply,
     shouldUseConfiguredWelcomeReply,
+    isAvailabilityLookupIntent,
+    buildFriendlyGreetingPrefix,
+    ensureFriendlyFirstReply,
+    buildRealtimeTemporalContext,
+    buildTemporalReferenceText,
+    buildFinalReplyRecoveryMessages,
+    sanitizeAssistantOpening,
     parseInlineToolCallsFromContent,
     sanitizeAssistantReply,
     stringifyMessageContent,
-    toOpenAIChatMessage,
-    toLangChainAIMessage,
   },
 };

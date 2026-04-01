@@ -223,7 +223,10 @@ const listAvailableSlots = async ({
   referenceDate,
   limit = 30,
 }) => {
-  const normalizedStart = normalizeDate(startDate, referenceDate) || normalizeDate(referenceDate) || new Date().toISOString().slice(0, 10);
+  const normalizedStart =
+    normalizeDate(startDate, referenceDate) ||
+    normalizeDate(referenceDate) ||
+    getCurrentDateInTimeZone();
   const normalizedEnd = normalizeDate(endDate, referenceDate) || addDays(normalizedStart, 14);
 
   const empresa = await prisma.eMPRESA.findUnique({

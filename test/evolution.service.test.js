@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   extractIncomingMessages,
   hasProcessableText,
+  mergeBufferedIncomingMessages,
   normalizeIncomingMessage,
   normalizeQrPayload,
 } = require("../src/services/evolution.service");
@@ -138,4 +139,37 @@ test("normalizeQrPayload supports nested webhook payload data", () => {
   assert.equal(normalized.code, "2@ABCD");
   assert.equal(normalized.source, "image");
   assert.match(normalized.imageDataUrl, /^data:image\/png;base64,/);
+});
+
+test("mergeBufferedIncomingMessages joins consecutive texts into one prompt", () => {
+  const merged = mergeBufferedIncomingMessages([
+    {
+      messageId: "msg-1",
+      phoneNumber: "5492657000000",
+      pushName: "Valentin",
+      text: "Hola",
+      timestamp: 100,
+    },
+    {
+      messageId: "msg-2",
+      phoneNumber: "5492657000000",
+      pushName: "Valentin",
+      text: "como estas?",
+      timestamp: 200,
+    },
+    {
+      messageId: "msg-3",
+      phoneNumber: "5492657000000",
+      pushName: "Valentin",
+      text: "Que turnos tenes disponibles?",
+      timestamp: 300,
+    },
+  ]);
+
+  assert.equal(
+    merged.text,
+    "Hola\ncomo estas?\nQue turnos tenes disponibles?"
+  );
+  assert.equal(merged.mergedCount, 3);
+  assert.deepEqual(merged.mergedMessageIds, ["msg-1", "msg-2", "msg-3"]);
 });

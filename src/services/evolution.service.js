@@ -1,10 +1,21 @@
-const axios = require("axios");
-const { processAudioMessage } = require("./ai/audioTranscriptionGroqService");
+﻿const axios = require("axios");
+const {
+  processAudioMessage,
+  AUDIO_DOWNLOAD_ERROR,
+  AUDIO_TRANSCRIPTION_FAILED,
+  AUDIO_TRANSCRIPTION_NOT_CONFIGURED,
+} = require("./ai/audioTranscriptionGroqService");
 const pool = require("../config/db");
 const {
   getEvolutionApiConfig,
   getEvolutionRequestHeaders,
 } = require("./evolutionConfig.service");
+const {
+  buildPhoneVariants,
+  getConfiguredSupportPhones,
+  getIgnoredInternalPhonesForInstance,
+  normalizeWhatsappPhone,
+} = require("./internalWhatsapp.service");
 
 const { baseUrl: EVOLUTION_API_URL, apiKey: EVOLUTION_API_KEY } = getEvolutionApiConfig();
 const EVOLUTION_WEBHOOK_ENABLED = (process.env.EVOLUTION_WEBHOOK_ENABLED || "true") === "true";
@@ -13,23 +24,6 @@ const WHATSAPP_INSTANCE_PREFIX = process.env.WHATSAPP_INSTANCE_PREFIX || "citax"
 const SUPPORT_INSTANCE_NAME = String(process.env.SUPPORT_WHATSAPP_INSTANCE || "citax-support-whatsapp")
   .trim()
   .toLowerCase();
-
-const buildPhoneVariants = (value) => {
-  const digits = String(value || "").replace(/[^\d]/g, "").trim();
-  if (!digits) return [];
-
-  const variants = new Set([digits]);
-
-  if (digits.startsWith("549") && digits.length >= 12) {
-    variants.add(`54${digits.slice(3)}`);
-  }
-
-  if (digits.startsWith("54") && !digits.startsWith("549") && digits.length >= 11) {
-    variants.add(`549${digits.slice(2)}`);
-  }
-
-  return [...variants];
-};
 
 const parseIgnoredPhonesFromBotConfig = (rawConfig) => {
   try {
@@ -41,6 +35,69 @@ const parseIgnoredPhonesFromBotConfig = (rawConfig) => {
   } catch (_) {
     return new Set();
   }
+};
+
+const COMPANY_INTERNAL_PHONES_CACHE_TTL_MS = 60 * 1000;
+let companyInternalPhonesCache = {
+  expiresAt: 0,
+  phones: new Set(),
+};
+
+const invalidateCompanyInternalPhonesCache = () => {
+  companyInternalPhonesCache = {
+    expiresAt: 0,
+    phones: new Set(),
+  };
+};
+
+const getCompanyInternalPhones = async () => {
+  if (Date.now() <= companyInternalPhonesCache.expiresAt) {
+    return new Set(companyInternalPhonesCache.phones);
+  }
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT whatsapp_number
+       FROM CONFIG_WHATSAPP
+       WHERE whatsapp_number IS NOT NULL
+         AND TRIM(whatsapp_number) <> ''`
+    );
+
+    const phones = new Set();
+    for (const row of rows) {
+      for (const variant of buildPhoneVariants(row?.whatsapp_number)) {
+        phones.add(variant);
+      }
+    }
+
+    companyInternalPhonesCache = {
+      expiresAt: Date.now() + COMPANY_INTERNAL_PHONES_CACHE_TTL_MS,
+      phones,
+    };
+
+    return new Set(phones);
+  } catch (error) {
+    console.error("Error obteniendo telefonos internos de empresas:", error.message);
+    return new Set();
+  }
+};
+
+const shouldIgnoreInternalPlatformPhone = async ({ instanceName, phoneNumber }) => {
+  const normalizedPhone = normalizeWhatsappPhone(phoneNumber);
+  if (!normalizedPhone) return false;
+
+  const ignoredInternalPhones = getIgnoredInternalPhonesForInstance({
+    currentInstanceName: instanceName,
+    supportInstanceName: SUPPORT_INSTANCE_NAME,
+    supportPhones: getConfiguredSupportPhones(),
+    companyPhones: await getCompanyInternalPhones(),
+  });
+
+  const internalPhones = new Set(
+    [...ignoredInternalPhones].flatMap((value) => buildPhoneVariants(value))
+  );
+
+  return internalPhones.has(normalizedPhone);
 };
 
 const getIgnoredPhonesForInstance = async (instanceName) => {
@@ -295,7 +352,7 @@ const disconnectInstance = async (instanceName) => {
     const status = error.response?.status;
     const code = error.code;
 
-    // Instance already gone or Evolution API not reachable — treat as success
+    // Instance already gone or Evolution API not reachable â€” treat as success
     if (status === 404 || status === 400 || code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === "ECONNABORTED") {
       return {
         success: true,
@@ -307,7 +364,7 @@ const disconnectInstance = async (instanceName) => {
   }
 };
 
-// ─── Send text message via Evolution API ──────────────────────────────
+// â”€â”€â”€ Send text message via Evolution API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const sendTextMessage = async (phoneNumber, text, instanceName) => {
   const normalizedInstanceName = normalizeInstanceName(instanceName);
   const number = String(phoneNumber).replace(/[^\d]/g, "");
@@ -318,7 +375,7 @@ const sendTextMessage = async (phoneNumber, text, instanceName) => {
   return response.data;
 };
 
-// ─── Extract messages from webhook payload ────────────────────────────
+// â”€â”€â”€ Extract messages from webhook payload â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const extractIncomingMessages = (webhookData) => {
   if (!webhookData) return [];
   const event = webhookData.event || webhookData.type || "";
@@ -342,7 +399,7 @@ const extractIncomingMessages = (webhookData) => {
   );
 };
 
-// ─── Help identify the actual message content (skipping wrappers) ────────
+// â”€â”€â”€ Help identify the actual message content (skipping wrappers) â”€â”€â”€â”€â”€â”€â”€â”€
 const unwrapMessage = (msg) => {
   if (!msg) return { type: "unknown", content: {} };
   
@@ -393,33 +450,45 @@ const detectAudioMessage = ({ rawType, messageType, content, msg }) => {
   );
 };
 
-const hasProcessableText = (value) => {
-  const normalized = String(value || "").trim();
-  if (!normalized) return false;
-
-  const placeholders = new Set([
-    "[error al descargar el audio]",
-    "[audio recibido, pero falló la transcripción]",
-    "[audio recibido, pero la transcripción por ia no está configurada]",
-    "[audio recibido, pero la transcripcion por ia no esta configurada]",
-    "[audio recibido, pero fallo la transcripcion]",
-  ]);
-
-  return !placeholders.has(normalized.toLowerCase());
+const normalizeComparableText = (value) => {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^\w\s\[\]]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 };
 
 const isAudioTranscriptionPlaceholder = (value) => {
-  const normalized = String(value || "").trim().toLowerCase();
-  return new Set([
-    String(AUDIO_DOWNLOAD_ERROR || "").trim().toLowerCase(),
-    String(AUDIO_TRANSCRIPTION_FAILED || "").trim().toLowerCase(),
-    String(AUDIO_TRANSCRIPTION_NOT_CONFIGURED || "").trim().toLowerCase(),
-    "[audio recibido, pero fallã³ la transcripciã³n]",
-    "[audio recibido, pero la transcripciã³n por ia no estã¡ configurada]",
-  ]).has(normalized);
+  const normalized = normalizeComparableText(value);
+  if (!normalized) return true;
+
+  const placeholders = [
+    AUDIO_DOWNLOAD_ERROR,
+    AUDIO_TRANSCRIPTION_FAILED,
+    AUDIO_TRANSCRIPTION_NOT_CONFIGURED,
+    "[Audio recibido, pero falló la transcripción]",
+    "[Audio recibido, pero la transcripcion por IA no esta configurada]",
+    "[Audio recibido, pero fallo la transcripcion]",
+  ].map(normalizeComparableText);
+
+  if (placeholders.includes(normalized)) {
+    return true;
+  }
+
+  return (
+    normalized.includes("descargar el audio") ||
+    (normalized.includes("audio recibido") && normalized.includes("transcrip")) ||
+    normalized.includes("transcripcion por ia no esta configurada")
+  );
 };
 
-// ─── Normalize an incoming message ────────────────────────────────────
+const hasProcessableText = (value) => {
+  const normalized = String(value || "").trim();
+  if (!normalized) return false;
+  return !isAudioTranscriptionPlaceholder(normalized);
+};
+
+// â”€â”€â”€ Normalize an incoming message â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const normalizeIncomingMessage = (instanceName, raw, webhookData) => {
   const key = raw?.key || {};
   const msg = raw?.message || {};
@@ -458,9 +527,13 @@ const normalizeIncomingMessage = (instanceName, raw, webhookData) => {
   };
 };
 
-// ─── In-memory recent messages store (for frontend) ───────────────────
+// â”€â”€â”€ In-memory recent messages store (for frontend) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const recentMessagesStore = new Map();
 const MAX_RECENT = 100;
+const pendingIncomingMessageBatches = new Map();
+const WHATSAPP_MESSAGE_BATCH_WINDOW_MS = Number(
+  process.env.WHATSAPP_MESSAGE_BATCH_WINDOW_MS || 1400
+);
 
 const storeRecentMessage = (instanceName, normalized) => {
   const key = normalizeInstanceName(instanceName);
@@ -482,27 +555,135 @@ const getRecentMessages = (instanceName) => {
   return recentMessagesStore.get(normalizeInstanceName(instanceName)) || [];
 };
 
-// ─── Process incoming messages (AI pipeline) ──────────────────────────
+const getIncomingMessageBatchKey = ({ instanceName, phoneNumber }) =>
+  `${normalizeInstanceName(instanceName)}:${normalizeWhatsappPhone(phoneNumber)}`;
+
+const mergeBufferedIncomingMessages = (messages = []) => {
+  const normalizedMessages = [...messages]
+    .filter((message) => message && hasProcessableText(message.text))
+    .sort((left, right) => Number(left?.timestamp || 0) - Number(right?.timestamp || 0));
+
+  if (!normalizedMessages.length) {
+    return null;
+  }
+
+  const firstMessage = normalizedMessages[0];
+  const lastMessage = normalizedMessages[normalizedMessages.length - 1];
+  const mergedText = normalizedMessages
+    .map((message) => String(message.text || "").trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+
+  return {
+    ...lastMessage,
+    pushName: lastMessage.pushName || firstMessage.pushName || "",
+    text: mergedText,
+    mergedCount: normalizedMessages.length,
+    mergedMessageIds: normalizedMessages
+      .map((message) => message.messageId)
+      .filter(Boolean),
+  };
+};
+
+const flushIncomingMessageBatch = async (batchKey) => {
+  const batch = pendingIncomingMessageBatches.get(batchKey);
+  if (!batch) return;
+
+  pendingIncomingMessageBatches.delete(batchKey);
+  const mergedMessage = mergeBufferedIncomingMessages(batch.messages);
+  if (!mergedMessage) {
+    return;
+  }
+
+  const instanceName = normalizeInstanceName(batch.instanceName);
+  const { runSupportAssistant, runWhatsappAssistant } = require("./ai/geminiService");
+
+  console.log("🧩 Procesando lote de mensajes:", {
+    instanceName,
+    from: mergedMessage.phoneNumber,
+    count: mergedMessage.mergedCount,
+    textPreview: String(mergedMessage.text || "").slice(0, 150),
+  });
+
+  try {
+    const aiResponse =
+      instanceName === normalizeInstanceName(SUPPORT_INSTANCE_NAME)
+        ? await runSupportAssistant({ incomingMessage: mergedMessage })
+        : await runWhatsappAssistant({
+            instanceName,
+            incomingMessage: mergedMessage,
+          });
+
+    console.log("🤖 Resultado IA:", {
+      enabled: aiResponse?.enabled,
+      hasText: Boolean(aiResponse?.text),
+      reason: aiResponse?.reason || null,
+      textPreview: (aiResponse?.text || "").slice(0, 150),
+    });
+
+    if (aiResponse?.enabled && aiResponse?.text) {
+      await sendTextMessage(mergedMessage.phoneNumber, aiResponse.text, instanceName);
+      console.log("✅ Respuesta IA enviada a:", mergedMessage.phoneNumber);
+    } else {
+      console.log("ℹ️ IA no respondió:", aiResponse?.reason || "sin razón");
+    }
+  } catch (error) {
+    console.error("❌ Error ejecutando asistente IA:", error.message, error.stack?.slice(0, 300));
+  }
+};
+
+const enqueueIncomingMessageForAssistant = ({ instanceName, normalized }) => {
+  const batchKey = getIncomingMessageBatchKey({
+    instanceName,
+    phoneNumber: normalized.phoneNumber,
+  });
+
+  const existingBatch = pendingIncomingMessageBatches.get(batchKey);
+  if (existingBatch) {
+    clearTimeout(existingBatch.timer);
+    existingBatch.messages.push(normalized);
+    existingBatch.timer = setTimeout(() => {
+      flushIncomingMessageBatch(batchKey).catch((error) => {
+        console.error("❌ Error procesando lote de mensajes:", error.message);
+      });
+    }, WHATSAPP_MESSAGE_BATCH_WINDOW_MS);
+    pendingIncomingMessageBatches.set(batchKey, existingBatch);
+    return;
+  }
+
+  const batch = {
+    instanceName,
+    phoneNumber: normalized.phoneNumber,
+    messages: [normalized],
+    timer: setTimeout(() => {
+      flushIncomingMessageBatch(batchKey).catch((error) => {
+        console.error("❌ Error procesando lote de mensajes:", error.message);
+      });
+    }, WHATSAPP_MESSAGE_BATCH_WINDOW_MS),
+  };
+
+  pendingIncomingMessageBatches.set(batchKey, batch);
+};
+
+// â”€â”€â”€ Process incoming messages (AI pipeline) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const processIncomingMessage = async ({ instanceName, webhookData }) => {
   const messages = extractIncomingMessages(webhookData);
   const ignoredPhones = await getIgnoredPhonesForInstance(instanceName);
 
   if (!messages.length) {
-    console.log("📡 Evento de WhatsApp recibido (sin mensajes):", {
+    console.log("ðŸ“¡ Evento de WhatsApp recibido (sin mensajes):", {
       instanceName,
       event: webhookData?.event || webhookData?.type || "unknown",
     });
     return;
   }
 
-  // Lazy-load AI to avoid circular deps at startup
-  const { runSupportAssistant, runWhatsappAssistant } = require("./ai/geminiService");
-
   for (const message of messages) {
     const normalized = normalizeIncomingMessage(instanceName, message, webhookData);
     storeRecentMessage(instanceName, normalized);
 
-    console.log("📩 Mensaje entrante:", {
+    console.log("ðŸ“© Mensaje entrante:", {
       instanceName,
       from: normalized.phoneNumber,
       pushName: normalized.pushName,
@@ -512,35 +693,46 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
     });
 
     // Skip groups, self-messages, or messages without phone
-    if (normalized.isGroup) { console.log("⏭️ Ignorado: es grupo"); continue; }
-    if (normalized.fromMe) { console.log("⏭️ Ignorado: fromMe=true"); continue; }
-    if (!normalized.phoneNumber) { console.log("⏭️ Ignorado: sin teléfono"); continue; }
+    if (normalized.isGroup) { console.log("â­ï¸ Ignorado: es grupo"); continue; }
+    if (normalized.fromMe) { console.log("â­ï¸ Ignorado: fromMe=true"); continue; }
+    if (!normalized.phoneNumber) { console.log("â­ï¸ Ignorado: sin telÃ©fono"); continue; }
 
     if (ignoredPhones.has(normalized.phoneNumber)) {
-      console.log("â­ï¸ Ignorado por blacklist:", {
+      console.log("Ã¢ÂÂ­Ã¯Â¸Â Ignorado por blacklist:", {
+        instanceName,
+        from: normalized.phoneNumber,
+      });
+      continue;
+    }
+    if (await shouldIgnoreInternalPlatformPhone({
+      instanceName,
+      phoneNumber: normalized.phoneNumber,
+    })) {
+      console.log("⏭️ Ignorado: numero interno de plataforma", {
         instanceName,
         from: normalized.phoneNumber,
       });
       continue;
     }
 
+
     // Check connection state
     const connectionState = await getSafeConnectionState(instanceName);
     const staticStatus = connectionState?.instance?.state || connectionState?.state || "unknown";
-    if (staticStatus !== "open") { console.log("⏭️ Ignorado: instancia no abierta, status:", staticStatus); continue; }
+    if (staticStatus !== "open") { console.log("â­ï¸ Ignorado: instancia no abierta, status:", staticStatus); continue; }
 
     // Audio Transcription logic
     if (normalized.isAudio) {
-      console.log("🎙️ Procesando mensaje de audio...");
+      console.log("ðŸŽ™ï¸ Procesando mensaje de audio...");
       const transcript = await processAudioMessage(instanceName, normalized.messageId);
       normalized.text = transcript;
-      console.log("📝 Audio transcrito:", transcript);
+      console.log("ðŸ“ Audio transcrito:", transcript);
     } else {
-      console.log("ℹ️ Tipo de mensaje:", normalized.rawType || normalized.messageType);
+      console.log("â„¹ï¸ Tipo de mensaje:", normalized.rawType || normalized.messageType);
     }
 
     if (!hasProcessableText(normalized.text)) {
-      console.log("⏭️ Ignorado: mensaje sin contenido procesable", {
+      console.log("â­ï¸ Ignorado: mensaje sin contenido procesable", {
         instanceName,
         from: normalized.phoneNumber,
         messageId: normalized.messageId,
@@ -549,32 +741,8 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
       continue;
     }
 
-    console.log("🧠 Ejecutando asistente IA para:", normalized.phoneNumber);
-
-    try {
-      const aiResponse = normalizeInstanceName(instanceName) === normalizeInstanceName(SUPPORT_INSTANCE_NAME)
-        ? await runSupportAssistant({ incomingMessage: normalized })
-        : await runWhatsappAssistant({
-            instanceName,
-            incomingMessage: normalized,
-          });
-
-      console.log("🤖 Resultado IA:", {
-        enabled: aiResponse?.enabled,
-        hasText: Boolean(aiResponse?.text),
-        reason: aiResponse?.reason || null,
-        textPreview: (aiResponse?.text || "").slice(0, 150),
-      });
-
-      if (aiResponse?.enabled && aiResponse?.text) {
-        await sendTextMessage(normalized.phoneNumber, aiResponse.text, instanceName);
-        console.log("✅ Respuesta IA enviada a:", normalized.phoneNumber);
-      } else {
-        console.log("ℹ️ IA no respondió:", aiResponse?.reason || "sin razón");
-      }
-    } catch (error) {
-      console.error("❌ Error ejecutando asistente IA:", error.message, error.stack?.slice(0, 300));
-    }
+    console.log("🧠 Encolando mensaje para IA:", normalized.phoneNumber);
+    enqueueIncomingMessageForAssistant({ instanceName, normalized });
   }
 };
 
@@ -589,6 +757,8 @@ module.exports = {
   getRecentMessages,
   getSafeConnectionState,
   hasProcessableText,
+  invalidateCompanyInternalPhonesCache,
+  mergeBufferedIncomingMessages,
   normalizeInstanceName,
   normalizeIncomingMessage,
   normalizeQrPayload,
