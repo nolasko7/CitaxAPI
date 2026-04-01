@@ -5,6 +5,21 @@ const toTrimmedString = (value, maxLength) =>
     .slice(0, maxLength)
     .trim();
 
+const sanitizeIgnoredPhones = (value) => {
+  const rawItems = Array.isArray(value)
+    ? value
+    : String(value || "")
+        .split(/\r?\n|,|;/)
+        .map((item) => item.trim());
+
+  return [...new Set(
+    rawItems
+      .map((item) => String(item || "").replace(/[^\d]/g, "").trim())
+      .filter(Boolean)
+      .slice(0, 200)
+  )];
+};
+
 const parseBotConfig = (raw) => {
   if (!raw) return {};
 
@@ -50,6 +65,7 @@ const sanitizeBotConfig = (payload = {}, currentConfig = {}) => {
     rubro: toTrimmedString(payload.rubro, 100),
     mensaje_bienvenida: toTrimmedString(payload.mensaje_bienvenida, 200),
     palabras_propias: toTrimmedString(payload.palabras_propias, 500),
+    telefonos_ignorados: sanitizeIgnoredPhones(payload.telefonos_ignorados ?? base.telefonos_ignorados),
     primera_persona: singleProviderMode || payload.primera_persona === true,
     cuenta_prestador_unico: singleProviderMode,
   };

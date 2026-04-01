@@ -1,6 +1,16 @@
-﻿const { AIMessage, HumanMessage, SystemMessage, isAIMessage } = require("@langchain/core/messages");
+﻿const {
+  AIMessage,
+  HumanMessage,
+  SystemMessage,
+  isAIMessage,
+} = require("@langchain/core/messages");
 const { tool } = require("@langchain/core/tools");
-const { StateGraph, MessagesAnnotation, END, START } = require("@langchain/langgraph");
+const {
+  StateGraph,
+  MessagesAnnotation,
+  END,
+  START,
+} = require("@langchain/langgraph");
 const { ToolNode, toolsCondition } = require("@langchain/langgraph/prebuilt");
 const { z } = require("zod");
 const axios = require("axios");
@@ -9,12 +19,16 @@ const {
   cancelAppointmentFromAssistant,
   cancelAppointmentByCompanyFromAssistant,
   createAppointmentFromAssistant,
+  getCompanyContextByCompanyId,
   getCompanyContextByInstanceName,
   listAvailableSlots,
   listAppointmentsByDay,
 } = require("./companyContextService");
 const { authenticateCompanyUser } = require("../authCompany.service");
-const { getSupportSessionDb, setSupportSessionDb } = require("../supportAuthSession.service");
+const {
+  getSupportSessionDb,
+  setSupportSessionDb,
+} = require("../supportAuthSession.service");
 const { buildAssistantPrompt } = require("./assistantPrompt");
 const {
   formatNaturalDate,
@@ -35,33 +49,41 @@ const DEFAULT_PROVIDER_MODELS = {
 const LLM_TEMPERATURE = Number(process.env.LLM_TEMPERATURE || 0);
 const LLM_MAX_TOKENS = Number(process.env.LLM_MAX_TOKENS || 1200);
 const LLM_REQUEST_TIMEOUT_MS = Number(
-  process.env.LLM_REQUEST_TIMEOUT_MS || 45000
+  process.env.LLM_REQUEST_TIMEOUT_MS || 45000,
 );
 const conversationMemory = new Map();
 const MAX_CONVERSATION_MESSAGES = 24;
-const SUPPORT_INSTANCE_NAME = String(process.env.SUPPORT_WHATSAPP_INSTANCE || "citax-support-whatsapp")
+const SUPPORT_INSTANCE_NAME = String(
+  process.env.SUPPORT_WHATSAPP_INSTANCE || "citax-support-whatsapp",
+)
   .trim()
   .toLowerCase();
-const SUPPORT_SESSION_TTL_MS = Number(process.env.SUPPORT_SESSION_TTL_HOURS || 24) * 60 * 60 * 1000;
+const SUPPORT_SESSION_TTL_MS =
+  Number(process.env.SUPPORT_SESSION_TTL_HOURS || 24) * 60 * 60 * 1000;
 const supportLoginSessions = new Map();
 const supportLastCancelledByOperator = new Map();
 const SUPPORT_NOTIFY_PHONE = String(
-  process.env.SUPPORT_NOTIFY_PHONE || process.env.MATI_WHATSAPP_NUMBER || ""
+  process.env.SUPPORT_NOTIFY_PHONE || process.env.MATI_WHATSAPP_NUMBER || "",
 ).replace(/[^\d]/g, "");
 const SUPPORT_NOTIFY_LABEL = String(
-  process.env.SUPPORT_NOTIFY_LABEL || "el contacto responsable"
+  process.env.SUPPORT_NOTIFY_LABEL || "el contacto responsable",
 ).trim();
-const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL || "http://localhost:8080";
+const EVOLUTION_API_URL =
+  process.env.EVOLUTION_API_URL || "http://localhost:8080";
 const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY || "";
 const LAST_CANCELLED_TTL_MS = 2 * 60 * 60 * 1000;
 
 const normalizeProviderName = (value, fallback = "") => {
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
   return normalized || fallback;
 };
 
 const resolveOllamaOpenAiBaseUrl = (value) => {
-  const normalized = String(value || "").trim().replace(/\/$/, "");
+  const normalized = String(value || "")
+    .trim()
+    .replace(/\/$/, "");
 
   if (!normalized) {
     return DEFAULT_PROVIDER_BASE_URLS.ollama;
@@ -97,16 +119,20 @@ const getProviderApiKeyFromEnv = (providerName) => {
 const getProviderBaseUrlFromEnv = (providerName) => {
   if (providerName === "ollama") {
     return resolveOllamaOpenAiBaseUrl(
-      process.env.OLLAMA_API_URL || DEFAULT_PROVIDER_BASE_URLS.ollama
+      process.env.OLLAMA_API_URL || DEFAULT_PROVIDER_BASE_URLS.ollama,
     );
   }
 
   if (providerName === "groq") {
-    return String(process.env.GROQ_BASE_URL || DEFAULT_PROVIDER_BASE_URLS.groq).trim();
+    return String(
+      process.env.GROQ_BASE_URL || DEFAULT_PROVIDER_BASE_URLS.groq,
+    ).trim();
   }
 
   if (providerName === "openrouter") {
-    return String(process.env.OPENROUTER_BASE_URL || DEFAULT_PROVIDER_BASE_URLS.openrouter).trim();
+    return String(
+      process.env.OPENROUTER_BASE_URL || DEFAULT_PROVIDER_BASE_URLS.openrouter,
+    ).trim();
   }
 
   return "";
@@ -114,15 +140,21 @@ const getProviderBaseUrlFromEnv = (providerName) => {
 
 const getProviderModelFromEnv = (providerName) => {
   if (providerName === "ollama") {
-    return String(process.env.OLLAMA_MODEL || DEFAULT_PROVIDER_MODELS.ollama).trim();
+    return String(
+      process.env.OLLAMA_MODEL || DEFAULT_PROVIDER_MODELS.ollama,
+    ).trim();
   }
 
   if (providerName === "groq") {
-    return String(process.env.GROQ_MODEL || DEFAULT_PROVIDER_MODELS.groq).trim();
+    return String(
+      process.env.GROQ_MODEL || DEFAULT_PROVIDER_MODELS.groq,
+    ).trim();
   }
 
   if (providerName === "openrouter") {
-    return String(process.env.OPENROUTER_MODEL || DEFAULT_PROVIDER_MODELS.openrouter).trim();
+    return String(
+      process.env.OPENROUTER_MODEL || DEFAULT_PROVIDER_MODELS.openrouter,
+    ).trim();
   }
 
   return "";
@@ -132,7 +164,7 @@ const resolveSlotProviderConfig = ({ slot, defaultProvider }) => {
   const prefix = slot === "primary" ? "LLM_PRIMARY" : "LLM_FALLBACK";
   const providerName = normalizeProviderName(
     process.env[`${prefix}_PROVIDER`],
-    defaultProvider
+    defaultProvider,
   );
   const apiKey =
     String(process.env[`${prefix}_API_KEY`] || "").trim() ||
@@ -169,28 +201,40 @@ const FALLBACK_PROVIDER_CONFIG = resolveSlotProviderConfig({
   defaultProvider: "openrouter",
 });
 
-const getConversationKey = ({ instanceName, customerPhone }) => `${instanceName}:${customerPhone}`;
+const getConversationKey = ({ instanceName, customerPhone }) =>
+  `${instanceName}:${customerPhone}`;
 
 const getConversationHistory = ({ instanceName, customerPhone }) => {
-  return conversationMemory.get(getConversationKey({ instanceName, customerPhone })) || [];
+  return (
+    conversationMemory.get(
+      getConversationKey({ instanceName, customerPhone }),
+    ) || []
+  );
 };
 
 const setConversationHistory = ({ instanceName, customerPhone, messages }) => {
   const filtered = messages
     .filter((m) => m._getType?.() !== "system")
     .slice(-MAX_CONVERSATION_MESSAGES);
-  conversationMemory.set(getConversationKey({ instanceName, customerPhone }), filtered);
+  conversationMemory.set(
+    getConversationKey({ instanceName, customerPhone }),
+    filtered,
+  );
 };
 
 const clearConversationHistory = ({ instanceName, customerPhone }) => {
-  conversationMemory.delete(getConversationKey({ instanceName, customerPhone }));
+  conversationMemory.delete(
+    getConversationKey({ instanceName, customerPhone }),
+  );
 };
 
 const isAssistantConfigured = () =>
   AI_ENABLED &&
   Boolean(PRIMARY_PROVIDER_CONFIG.apiKey || FALLBACK_PROVIDER_CONFIG.apiKey);
 
-const buildRealtimeTemporalContext = (timezone = "America/Argentina/Buenos_Aires") => {
+const buildRealtimeTemporalContext = (
+  timezone = "America/Argentina/Buenos_Aires",
+) => {
   const now = new Date();
   const isoUtc = now.toISOString();
   const localDate = new Intl.DateTimeFormat("en-CA", {
@@ -238,7 +282,12 @@ const getSupportSession = async (customerPhone) => {
   return merged;
 };
 
-const setSupportSession = async ({ customerPhone, companyId, companyName, userEmail }) => {
+const setSupportSession = async ({
+  customerPhone,
+  companyId,
+  companyName,
+  userEmail,
+}) => {
   const key = String(customerPhone || "").trim();
   if (!key) return;
   const payload = {
@@ -342,15 +391,15 @@ const toOpenAIChatMessage = (message) => {
   if (type === "ai") {
     const toolCalls = Array.isArray(message.tool_calls)
       ? message.tool_calls
-        .filter((toolCall) => toolCall?.name)
-        .map((toolCall, index) => ({
-          id: toolCall.id || `tool_call_${index + 1}`,
-          type: "function",
-          function: {
-            name: toolCall.name,
-            arguments: JSON.stringify(toolCall.args || {}),
-          },
-        }))
+          .filter((toolCall) => toolCall?.name)
+          .map((toolCall, index) => ({
+            id: toolCall.id || `tool_call_${index + 1}`,
+            type: "function",
+            function: {
+              name: toolCall.name,
+              arguments: JSON.stringify(toolCall.args || {}),
+            },
+          }))
       : undefined;
 
     return {
@@ -467,11 +516,15 @@ const extractAssistantReplyFromMessages = (messages = []) => {
     };
   }
 
-  const rawReply = typeof lastAI.content === "string"
-    ? lastAI.content.trim()
-    : Array.isArray(lastAI.content)
-      ? lastAI.content.map((part) => (typeof part === "string" ? part : part?.text || "")).join("\n").trim()
-      : "";
+  const rawReply =
+    typeof lastAI.content === "string"
+      ? lastAI.content.trim()
+      : Array.isArray(lastAI.content)
+        ? lastAI.content
+            .map((part) => (typeof part === "string" ? part : part?.text || ""))
+            .join("\n")
+            .trim()
+        : "";
 
   return {
     lastAI,
@@ -582,12 +635,9 @@ const looksLikeAppointmentConfirmation = (value) => {
   return confirmationPhrases.some((phrase) => normalized.includes(phrase));
 };
 
-const APPOINTMENT_CONFIRMATION_CLOSING = "Cualquier consulta, no dudes en llamarme";
-const NON_REPLY_MARKERS = new Set([
-  "no response",
-  "sin respuesta",
-  "no_reply",
-]);
+const APPOINTMENT_CONFIRMATION_CLOSING =
+  "Cualquier consulta, no dudes en llamarme";
+const NON_REPLY_MARKERS = new Set(["no response", "sin respuesta", "no_reply"]);
 
 const ensureAppointmentConfirmationClosing = (value) => {
   const reply = String(value || "").trim();
@@ -596,7 +646,9 @@ const ensureAppointmentConfirmationClosing = (value) => {
   }
 
   const normalizedReply = normalizeAssistantText(reply);
-  const normalizedClosing = normalizeAssistantText(APPOINTMENT_CONFIRMATION_CLOSING);
+  const normalizedClosing = normalizeAssistantText(
+    APPOINTMENT_CONFIRMATION_CLOSING,
+  );
   if (normalizedReply.includes(normalizedClosing)) {
     return reply;
   }
@@ -672,10 +724,10 @@ const toLangChainAIMessage = (responseData) => {
     },
     usage_metadata: responseData?.usage
       ? {
-        input_tokens: responseData.usage.prompt_tokens || 0,
-        output_tokens: responseData.usage.completion_tokens || 0,
-        total_tokens: responseData.usage.total_tokens || 0,
-      }
+          input_tokens: responseData.usage.prompt_tokens || 0,
+          output_tokens: responseData.usage.completion_tokens || 0,
+          total_tokens: responseData.usage.total_tokens || 0,
+        }
       : undefined,
   });
 };
@@ -722,7 +774,7 @@ const createModel = (provider) => {
             {
               headers: buildProviderHeaders(provider),
               timeout: LLM_REQUEST_TIMEOUT_MS,
-            }
+            },
           );
 
           return toLangChainAIMessage({
@@ -736,7 +788,11 @@ const createModel = (provider) => {
 };
 
 const resolvePreferredContactName = (rawName) => {
-  const first = String(rawName || "").replace(/[^\p{L}\s]/gu, " ").trim().split(/\s+/).filter(Boolean)[0];
+  const first = String(rawName || "")
+    .replace(/[^\p{L}\s]/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)[0];
   if (!first) return "";
   return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
 };
@@ -748,22 +804,24 @@ const createTools = ({ companyContext, customerPhone }) => {
         return JSON.stringify({
           companyName: companyContext.companyName,
           timezone: companyContext.timezone,
-          professionals: companyContext.professionals.map(p => ({
+          professionals: companyContext.professionals.map((p) => ({
             id: p.id,
             name: p.name,
             services: p.services,
             // Solo proveemos metadata principal.
             // Para conocer la disponibilidad real, Gemini DEBE llamar a find_available_slots.
-            requisito: "Para saber si este prestador atiende un dÃ­a u horario, DEBES usar obligatoriamente la herramienta find_available_slots. NO asumas ningÃºn horario comercial."
+            requisito:
+              "Para saber si este prestador atiende un dÃ­a u horario, DEBES usar obligatoriamente la herramienta find_available_slots. NO asumas ningÃºn horario comercial.",
           })),
           services: companyContext.services,
         });
       },
       {
         name: "get_company_context",
-        description: "Devuelve el contexto del negocio: prestadores, servicios y datos.",
+        description:
+          "Devuelve el contexto del negocio: prestadores, servicios y datos.",
         schema: z.object({}),
-      }
+      },
     ),
     tool(
       async ({ professionalName, serviceId, startDate, endDate, limit }) => {
@@ -789,18 +847,39 @@ const createTools = ({ companyContext, customerPhone }) => {
       },
       {
         name: "find_available_slots",
-        description: "Busca horarios disponibles para un prestador en un rango de fechas.",
+        description:
+          "Busca horarios disponibles para un prestador en un rango de fechas.",
         schema: z.object({
-          professionalName: z.string().optional().describe("Nombre del prestador."),
-          serviceId: z.number().optional().describe("ID del servicio para respetar la duracion real."),
-          startDate: z.string().optional().describe("Fecha desde (YYYY-MM-DD)."),
+          professionalName: z
+            .string()
+            .optional()
+            .describe("Nombre del prestador."),
+          serviceId: z
+            .number()
+            .optional()
+            .describe("ID del servicio para respetar la duracion real."),
+          startDate: z
+            .string()
+            .optional()
+            .describe("Fecha desde (YYYY-MM-DD)."),
           endDate: z.string().optional().describe("Fecha hasta (YYYY-MM-DD)."),
-          limit: z.number().optional().default(30).describe("MÃ¡ximo de resultados (1-40)."),
+          limit: z
+            .number()
+            .optional()
+            .default(30)
+            .describe("MÃ¡ximo de resultados (1-40)."),
         }),
-      }
+      },
     ),
     tool(
-      async ({ clientName, professionalId, serviceId, date, time }) => {
+      async ({
+        clientName,
+        clientPhone,
+        professionalId,
+        serviceId,
+        date,
+        time,
+      }) => {
         const appointment = await createAppointmentFromAssistant({
           companyId: companyContext.companyId,
           professionalId,
@@ -824,15 +903,23 @@ const createTools = ({ companyContext, customerPhone }) => {
       },
       {
         name: "create_appointment",
-        description: "Crea un turno confirmado. Solo usar cuando el cliente ya confirmÃ³.",
+        description:
+          "Crea un turno confirmado. Solo usar cuando el cliente ya confirmÃ³.",
         schema: z.object({
-          clientName: z.string().describe("Nombre del cliente (mÃ­nimo 3 caracteres)."),
+          clientName: z
+            .string()
+            .describe("Nombre del cliente (mÃ­nimo 3 caracteres)."),
           professionalId: z.number().describe("ID del prestador."),
-          serviceId: z.number().optional().describe("ID del servicio (si se omite se usa el primero disponible)."),
+          serviceId: z
+            .number()
+            .optional()
+            .describe(
+              "ID del servicio (si se omite se usa el primero disponible).",
+            ),
           date: z.string().describe("Fecha del turno (YYYY-MM-DD)."),
           time: z.string().describe("Hora de inicio (HH:mm)."),
         }),
-      }
+      },
     ),
     tool(
       async ({ date }) => {
@@ -847,9 +934,12 @@ const createTools = ({ companyContext, customerPhone }) => {
         name: "get_appointments_by_day",
         description: "Lista los turnos reservados para un dÃ­a especÃ­fico.",
         schema: z.object({
-          date: z.string().optional().describe("Fecha a consultar (YYYY-MM-DD)."),
+          date: z
+            .string()
+            .optional()
+            .describe("Fecha a consultar (YYYY-MM-DD)."),
         }),
-      }
+      },
     ),
     tool(
       async ({ date, time }) => {
@@ -873,7 +963,7 @@ const createTools = ({ companyContext, customerPhone }) => {
           date: z.string().optional().describe("Fecha del turno (YYYY-MM-DD)."),
           time: z.string().optional().describe("Hora del turno (HH:mm)."),
         }),
-      }
+      },
     ),
   ];
 };
@@ -884,30 +974,49 @@ const createSupportTools = ({ customerPhone, supportState }) => {
       async ({ email, password }) => {
         const authResult = await authenticateCompanyUser({ email, password });
         if (!authResult) {
-          return JSON.stringify({ success: false, error: "Credenciales invÃ¡lidas." });
+          return JSON.stringify({
+            success: false,
+            error: "Credenciales invÃ¡lidas.",
+          });
         }
         await setSupportSession({
           customerPhone,
           companyId: authResult.companyId,
-          companyName: authResult.user.nombre_comercial || `Empresa ${authResult.companyId}`,
+          companyName:
+            authResult.user.nombre_comercial ||
+            `Empresa ${authResult.companyId}`,
           userEmail: authResult.user.email,
         });
         supportState.companyId = authResult.companyId;
-        supportState.companyName = authResult.user.nombre_comercial || `Empresa ${authResult.companyId}`;
+        supportState.companyName =
+          authResult.user.nombre_comercial || `Empresa ${authResult.companyId}`;
+        const companyContext = await getCompanyContextByCompanyId(
+          authResult.companyId,
+          customerPhone,
+        ).catch(() => null);
         return JSON.stringify({
           success: true,
           companyId: authResult.companyId,
           companyName: supportState.companyName,
+          professionals:
+            companyContext?.professionals?.map((professional) => ({
+              id: professional.id,
+              name: professional.name,
+              services:
+                professional.services?.map((service) => service.name) || [],
+            })) || [],
+          singleProviderMode: companyContext?.professionals?.length === 1,
         });
       },
       {
         name: "login_empresa",
-        description: "Valida email y contraseÃ±a de empresa para asociar esta conversaciÃ³n.",
+        description:
+          "Valida email y contraseÃ±a de empresa para asociar esta conversaciÃ³n.",
         schema: z.object({
           email: z.string().describe("Email de acceso de la empresa."),
           password: z.string().describe("ContraseÃ±a de acceso de la empresa."),
         }),
-      }
+      },
     ),
     tool(
       async ({ professionalName, serviceId, startDate, endDate, limit }) => {
@@ -944,18 +1053,28 @@ const createSupportTools = ({ customerPhone, supportState }) => {
           endDate: z.string().optional(),
           limit: z.number().optional().default(30),
         }),
-      }
+      },
     ),
     tool(
-      async ({ clientName, professionalId, serviceId, date, time }) => {
+      async ({
+        clientName,
+        clientPhone,
+        professionalId,
+        serviceId,
+        date,
+        time,
+      }) => {
         if (!supportState.companyId) {
           throw new Error("Primero ejecutÃ¡ login_empresa.");
         }
+        const normalizedClientPhone = String(clientPhone || "")
+          .replace(/[^\d]/g, "")
+          .trim();
         const appointment = await createAppointmentFromAssistant({
           companyId: supportState.companyId,
           professionalId,
           clientName,
-          clientPhone: customerPhone,
+          clientPhone: normalizedClientPhone || null,
           serviceId: serviceId || null,
           date,
           time,
@@ -977,12 +1096,18 @@ const createSupportTools = ({ customerPhone, supportState }) => {
         description: "Crea un turno para la empresa autenticada.",
         schema: z.object({
           clientName: z.string(),
+          clientPhone: z
+            .string()
+            .optional()
+            .describe(
+              "Telefono real del cliente en formato internacional, si lo tenes.",
+            ),
           professionalId: z.number(),
           serviceId: z.number().optional(),
           date: z.string(),
           time: z.string(),
         }),
-      }
+      },
     ),
     tool(
       async ({ date }) => {
@@ -1000,7 +1125,7 @@ const createSupportTools = ({ customerPhone, supportState }) => {
         name: "get_appointments_by_day",
         description: "Lista turnos del dÃ­a de la empresa autenticada.",
         schema: z.object({ date: z.string().optional() }),
-      }
+      },
     ),
     tool(
       async ({ date, time, professionalName, clientName }) => {
@@ -1024,7 +1149,10 @@ const createSupportTools = ({ customerPhone, supportState }) => {
             clientPhone: result.clientPhone || "",
           };
           supportState.lastCancelled = cancelledPayload;
-          setLastCancelledContext({ operatorPhone: customerPhone, payload: cancelledPayload });
+          setLastCancelledContext({
+            operatorPhone: customerPhone,
+            payload: cancelledPayload,
+          });
         }
         return JSON.stringify(result);
       },
@@ -1034,56 +1162,75 @@ const createSupportTools = ({ customerPhone, supportState }) => {
         schema: z.object({
           date: z.string().optional(),
           time: z.string().optional(),
-                    serviceId: z.number().optional(),          clientName: z.string().optional(),
+          serviceId: z.number().optional(),
+          clientName: z.string().optional(),
         }),
-      }
+      },
     ),
     tool(
       async ({ date, time, professionalName, clientName, phone }) => {
-        const last = supportState.lastCancelled || getLastCancelledContext(customerPhone) || {};
+        const last =
+          supportState.lastCancelled ||
+          getLastCancelledContext(customerPhone) ||
+          {};
         const targetPhone = String(
-          phone ||
-          last.clientPhone ||
-          SUPPORT_NOTIFY_PHONE ||
-          ""
+          phone || last.clientPhone || SUPPORT_NOTIFY_PHONE || "",
         ).replace(/[^\d]/g, "");
 
         if (!targetPhone) {
           return JSON.stringify({
             success: false,
-            error: "No encontrÃ© un telÃ©fono destino para avisar (cliente cancelado o SUPPORT_NOTIFY_PHONE).",
+            error:
+              "No encontrÃ© un telÃ©fono destino para avisar (cliente cancelado o SUPPORT_NOTIFY_PHONE).",
           });
         }
         const resolvedDate = date || last.date || "sin fecha";
         const resolvedTime = time || last.time || "";
-        const resolvedProfessional = professionalName || last.professionalName || "";
+        const resolvedProfessional =
+          professionalName || last.professionalName || "";
         const resolvedClient = clientName || last.clientName || "";
 
-        const text = `Aviso de cancelaciÃ³n: ${supportState.companyName || "Empresa"} cancelÃ³ un turno (${resolvedDate} ${resolvedTime})${resolvedProfessional ? `, profesional: ${resolvedProfessional}` : ""}${resolvedClient ? `, cliente: ${resolvedClient}` : ""}.`;
+        const text = `Aviso de cancelacion: ${supportState.companyName || "Empresa"} cancela un turno (${resolvedDate} ${resolvedTime})${resolvedProfessional ? `, profesional: ${resolvedProfessional}` : ""}${resolvedClient ? `, cliente: ${resolvedClient}` : ""}.`;
 
         if (!supportState.companyId) {
-          throw new Error("No hay una cuenta de empresa autenticada para enviar el aviso.");
+          throw new Error(
+            "No hay una cuenta de empresa autenticada para enviar el aviso.",
+          );
         }
 
-        const { buildInstanceName, sendTextMessage } = require("../evolution.service");
-        const companyInstanceName = buildInstanceName({ companyId: supportState.companyId });
+        const {
+          buildInstanceName,
+          sendTextMessage,
+        } = require("../evolution.service");
+        const companyInstanceName = buildInstanceName({
+          companyId: supportState.companyId,
+        });
 
         try {
-          const res = await sendTextMessage(targetPhone, text, companyInstanceName);
-          console.log("âœ… Aviso de cancelaciÃ³n enviado", {
+          const res = await sendTextMessage(
+            targetPhone,
+            text,
+            companyInstanceName,
+          );
+          console.log("Aviso de cancelacion enviado", {
             to: targetPhone,
             company: supportState.companyName || supportState.companyId,
-            viaInstance: companyInstanceName
+            viaInstance: companyInstanceName,
           });
           return JSON.stringify({ success: true, targetPhone, response: res });
         } catch (error) {
           const details = error.response?.data || null;
           console.error(`\n==============================================`);
-          console.error("âŒ ERROR CRÃTICO - enviando aviso de cancelaciÃ³n al cliente");
-          console.error("  Desde instancia de la empresa:", companyInstanceName);
+          console.error(
+            "âŒ ERROR CRÃTICO - enviando aviso de cancelaciÃ³n al cliente",
+          );
+          console.error(
+            "  Desde instancia de la empresa:",
+            companyInstanceName,
+          );
           console.error("  TelÃ©fono destino:", targetPhone);
           console.error("  Texto:", text);
-          console.error("  Status HTTP:", error.response?.status || 'N/A');
+          console.error("  Status HTTP:", error.response?.status || "N/A");
           console.error("  Mensaje error NATIVO:", error.message);
           if (details) {
             console.error("  Detalles Evolution API:");
@@ -1100,14 +1247,21 @@ const createSupportTools = ({ customerPhone, supportState }) => {
       },
       {
         name: "notify_cancellation_contact",
-        description: "EnvÃ­a aviso al contacto de notificaciÃ³n cuando se confirma una cancelaciÃ³n.",
+        description:
+          "EnvÃ­a aviso al contacto de notificaciÃ³n cuando se confirma una cancelaciÃ³n.",
         schema: z.object({
           date: z.string().optional(),
           time: z.string().optional(),
-                    serviceId: z.number().optional(),          clientName: z.string().optional(),
-          phone: z.string().optional().describe("TelÃ©fono destino opcional; si no se envÃ­a, usa el cliente cancelado."),
+          serviceId: z.number().optional(),
+          clientName: z.string().optional(),
+          phone: z
+            .string()
+            .optional()
+            .describe(
+              "TelÃ©fono destino opcional; si no se envÃ­a, usa el cliente cancelado.",
+            ),
         }),
-      }
+      },
     ),
   ];
 };
@@ -1118,7 +1272,8 @@ const TOOL_DEFINITIONS_BY_NAME = {
     type: "function",
     function: {
       name: "login_empresa",
-      description: "Valida email y contraseÃ±a de empresa para asociar esta conversaciÃ³n.",
+      description:
+        "Valida email y contraseÃ±a de empresa para asociar esta conversaciÃ³n.",
       parameters: {
         type: "object",
         properties: {
@@ -1139,7 +1294,8 @@ const TOOL_DEFINITIONS_BY_NAME = {
     type: "function",
     function: {
       name: "get_company_context",
-      description: "Devuelve el contexto del negocio: prestadores, servicios y datos.",
+      description:
+        "Devuelve el contexto del negocio: prestadores, servicios y datos.",
       parameters: {
         type: "object",
         properties: {},
@@ -1151,7 +1307,8 @@ const TOOL_DEFINITIONS_BY_NAME = {
     type: "function",
     function: {
       name: "find_available_slots",
-      description: "Busca horarios disponibles para un prestador en un rango de fechas.",
+      description:
+        "Busca horarios disponibles para un prestador en un rango de fechas.",
       parameters: {
         type: "object",
         properties: {
@@ -1184,7 +1341,8 @@ const TOOL_DEFINITIONS_BY_NAME = {
     type: "function",
     function: {
       name: "create_appointment",
-      description: "Crea un turno confirmado. Solo usar cuando el cliente ya confirmÃ³.",
+      description:
+        "Crea un turno confirmado. Solo usar cuando el cliente ya confirmÃ³.",
       parameters: {
         type: "object",
         properties: {
@@ -1192,13 +1350,19 @@ const TOOL_DEFINITIONS_BY_NAME = {
             type: "string",
             description: "Nombre del cliente (mÃ­nimo 3 caracteres).",
           },
+          clientPhone: {
+            type: "string",
+            description:
+              "Telefono real del cliente en formato internacional, si lo tenes.",
+          },
           professionalId: {
             type: "number",
             description: "ID del prestador.",
           },
           serviceId: {
             type: "number",
-            description: "ID del servicio (si se omite se usa el primero disponible).",
+            description:
+              "ID del servicio (si se omite se usa el primero disponible).",
           },
           date: {
             type: "string",
@@ -1267,7 +1431,8 @@ const TOOL_DEFINITIONS_BY_NAME = {
     type: "function",
     function: {
       name: "notify_cancellation_contact",
-      description: "EnvÃ­a aviso al contacto configurado sobre una cancelaciÃ³n confirmada.",
+      description:
+        "EnvÃ­a aviso al contacto configurado sobre una cancelaciÃ³n confirmada.",
       parameters: {
         type: "object",
         properties: {
@@ -1285,9 +1450,7 @@ const TOOL_DEFINITIONS_BY_NAME = {
 
 const getToolDefinitions = (tools) => {
   const names = new Set(
-    (tools || [])
-      .map((candidate) => candidate?.name)
-      .filter(Boolean)
+    (tools || []).map((candidate) => candidate?.name).filter(Boolean),
   );
 
   return [...names]
@@ -1296,7 +1459,9 @@ const getToolDefinitions = (tools) => {
 };
 
 const createGraph = ({ provider, tools }) => {
-  const modelWithTools = createModel(provider).bindTools(getToolDefinitions(tools));
+  const modelWithTools = createModel(provider).bindTools(
+    getToolDefinitions(tools),
+  );
   const toolNode = new ToolNode(tools);
 
   const callModel = async (state) => {
@@ -1324,7 +1489,9 @@ const invokeGraphWithFallback = async ({ tools, messages }) => {
       const { reply } = extractAssistantReplyFromMessages(result.messages);
 
       if (!reply) {
-        const emptyReplyError = new Error("El proveedor terminÃ³ el flujo sin respuesta final.");
+        const emptyReplyError = new Error(
+          "El proveedor terminÃ³ el flujo sin respuesta final.",
+        );
         emptyReplyError.code = "empty_final_reply";
         throw emptyReplyError;
       }
@@ -1343,17 +1510,26 @@ const invokeGraphWithFallback = async ({ tools, messages }) => {
   throw lastError || new Error("No hay proveedores LLM configurados.");
 };
 
-const runWhatsappAssistant = async ({ instanceName, incomingMessage, companyContext: providedContext = null }) => {
+const runWhatsappAssistant = async ({
+  instanceName,
+  incomingMessage,
+  companyContext: providedContext = null,
+}) => {
   if (!isAssistantConfigured()) {
     return {
       enabled: false,
-      reason: "LLM no configurada. DefinÃ­ la API key del proveedor primario o secundario, o deshabilitÃ¡ la IA.",
+      reason:
+        "LLM no configurada. DefinÃ­ la API key del proveedor primario o secundario, o deshabilitÃ¡ la IA.",
     };
   }
 
   const customerPhone =
     incomingMessage?.phoneNumber ||
-    String(incomingMessage?.from || "").split("@")[0].split(":")[0].replace(/[^\d]/g, "").trim();
+    String(incomingMessage?.from || "")
+      .split("@")[0]
+      .split(":")[0]
+      .replace(/[^\d]/g, "")
+      .trim();
   const messageText = String(incomingMessage?.text || "").trim();
 
   if (!messageText) {
@@ -1366,15 +1542,24 @@ const runWhatsappAssistant = async ({ instanceName, incomingMessage, companyCont
   let companyContext = providedContext;
   if (!companyContext) {
     try {
-      companyContext = await getCompanyContextByInstanceName(instanceName, customerPhone);
+      companyContext = await getCompanyContextByInstanceName(
+        instanceName,
+        customerPhone,
+      );
     } catch (error) {
       console.error("âŒ Error cargando contexto:", error.message);
-      return { enabled: false, reason: "Error cargando contexto de la empresa." };
+      return {
+        enabled: false,
+        reason: "Error cargando contexto de la empresa.",
+      };
     }
   }
 
   if (!companyContext) {
-    return { enabled: false, reason: "No hay una empresa asociada a esta instancia." };
+    return {
+      enabled: false,
+      reason: "No hay una empresa asociada a esta instancia.",
+    };
   }
 
   const tools = createTools({ companyContext, customerPhone });
@@ -1404,7 +1589,9 @@ const runWhatsappAssistant = async ({ instanceName, incomingMessage, companyCont
   const { result, provider } = await invokeGraphWithFallback({
     tools,
     messages: [
-      new SystemMessage(`${systemPrompt}\n\n${temporalRef}\n\n${contactRef}\n\n${phoneRef}`),
+      new SystemMessage(
+        `${systemPrompt}\n\n${temporalRef}\n\n${contactRef}\n\n${phoneRef}`,
+      ),
       ...history,
       new HumanMessage(messageText),
     ],
@@ -1421,14 +1608,22 @@ const runWhatsappAssistant = async ({ instanceName, incomingMessage, companyCont
 
   const { reply } = extractAssistantReplyFromMessages(result.messages);
   const finalReply = sanitizeNonReplyOutput(
-    ensureAppointmentConfirmationClosing(reply)
+    ensureAppointmentConfirmationClosing(reply),
   );
 
   if (!finalReply) {
-    return { enabled: false, reason: "El asistente decidiÃ³ no responder.", companyContext };
+    return {
+      enabled: false,
+      reason: "El asistente decidiÃ³ no responder.",
+      companyContext,
+    };
   }
 
-  setConversationHistory({ instanceName, customerPhone, messages: result.messages });
+  setConversationHistory({
+    instanceName,
+    customerPhone,
+    messages: result.messages,
+  });
 
   return {
     enabled: true,
@@ -1444,7 +1639,11 @@ const runSupportAssistant = async ({ incomingMessage }) => {
 
   const customerPhone =
     incomingMessage?.phoneNumber ||
-    String(incomingMessage?.from || "").split("@")[0].split(":")[0].replace(/[^\d]/g, "").trim();
+    String(incomingMessage?.from || "")
+      .split("@")[0]
+      .split(":")[0]
+      .replace(/[^\d]/g, "")
+      .trim();
   const messageText = String(incomingMessage?.text || "").trim();
   if (!customerPhone || !messageText) {
     return { enabled: false, reason: "Mensaje sin contenido." };
@@ -1455,22 +1654,53 @@ const runSupportAssistant = async ({ incomingMessage }) => {
     companyId: persistedSession?.companyId || null,
     companyName: persistedSession?.companyName || null,
   };
+  const supportCompanyContext = supportState.companyId
+    ? await getCompanyContextByCompanyId(
+        supportState.companyId,
+        customerPhone,
+      ).catch(() => null)
+    : null;
 
   const tools = createSupportTools({ customerPhone, supportState });
-  const history = getConversationHistory({ instanceName: SUPPORT_INSTANCE_NAME, customerPhone });
+  const history = getConversationHistory({
+    instanceName: SUPPORT_INSTANCE_NAME,
+    customerPhone,
+  });
 
-  const realtimeContext = buildRealtimeTemporalContext("America/Argentina/Buenos_Aires");
+  const realtimeContext = buildRealtimeTemporalContext(
+    "America/Argentina/Buenos_Aires",
+  );
+  const supportProfessionalsRef = supportCompanyContext?.professionals?.length
+    ? `Prestadores activos de la empresa autenticada: ${supportCompanyContext.professionals
+        .map((professional) => {
+          const services = professional.services
+            ?.map((service) => service.name)
+            .filter(Boolean)
+            .join(", ");
+          return `${professional.name} (ID ${professional.id}${services ? `, servicios: ${services}` : ""})`;
+        })
+        .join(" | ")}.`
+    : "Prestadores activos de la empresa autenticada: sin datos cargados.";
+  const singleSupportProviderRule =
+    supportCompanyContext?.professionals?.length === 1
+      ? `Hay exactamente un solo prestador activo en esta empresa: ${supportCompanyContext.professionals[0].name} (ID ${supportCompanyContext.professionals[0].id}). Si te piden agendar un turno, NO preguntes con que profesional. Asumi ese prestador automaticamente para buscar disponibilidad y para crear el turno.`
+      : "Si hay mas de un prestador activo y el cliente no especifico cual quiere, ahi si pedi o inferi el prestador correcto antes de crear el turno.";
   const supportPrompt = `Sos el bot de soporte de Citax por WhatsApp.
 Si la conversaciÃ³n no tiene empresa autenticada, pedÃ­ email y contraseÃ±a de forma clara.
 Cuando tengas email y contraseÃ±a, ejecutÃ¡ la tool login_empresa.
 No digas que el login fue exitoso sin ejecutar la tool.
 DespuÃ©s del login, podÃ©s ayudar con: agendar turno, cancelar turno y ver agenda del dÃ­a usando tools.
+${singleSupportProviderRule}
+Si vas a agendar un turno para un cliente de la empresa, con el nombre del cliente alcanza para crear el turno.
+Solo pedÃ­ telefono del cliente si realmente hace falta como dato adicional o si la empresa quiere dejarlo asociado.
+Nunca uses el numero de WhatsApp del operador que estÃ¡ hablando con soporte como telefono del cliente, salvo que te digan explÃ­citamente que el turno es para ese mismo numero.
 Cuando canceles un turno y la cancelaciÃ³n sea exitosa, preguntÃ¡ explÃ­citamente: "Â¿QuerÃ©s que le avise al cliente?".
 Si te responden que sÃ­, ejecutÃ¡ notify_cancellation_contact.
 Primero intentÃ¡ avisar al cliente del turno cancelado; si no hay telÃ©fono de cliente, usÃ¡ el contacto general (${SUPPORT_NOTIFY_LABEL}) si estÃ¡ configurado.
 Nunca confirmes que se enviÃ³ un aviso si la tool devuelve success=false.
 RespondÃ© en espaÃ±ol, corto y claro, estilo WhatsApp.
 Empresa autenticada actual: ${supportState.companyName || "ninguna"}.
+${supportProfessionalsRef}
 Referencia temporal obligatoria: fecha local actual ${realtimeContext.localDate}, hora local ${realtimeContext.localTime}, zona ${realtimeContext.timezone}, timestamp UTC ${realtimeContext.isoUtc}.`;
 
   const { result, provider } = await invokeGraphWithFallback({
@@ -1503,7 +1733,11 @@ Referencia temporal obligatoria: fecha local actual ${realtimeContext.localDate}
     });
   }
 
-  setConversationHistory({ instanceName: SUPPORT_INSTANCE_NAME, customerPhone, messages: result.messages });
+  setConversationHistory({
+    instanceName: SUPPORT_INSTANCE_NAME,
+    customerPhone,
+    messages: result.messages,
+  });
   return { enabled: true, text: reply };
 };
 
@@ -1527,6 +1761,3 @@ module.exports = {
     toLangChainAIMessage,
   },
 };
-
-
-

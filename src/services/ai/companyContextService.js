@@ -55,6 +55,7 @@ const isSlotStillBookable = ({ slotEnd, now = getNowInTimezone() }) => {
 const pad = (v) => String(v).padStart(2, "0");
 const formatTime = (v) => String(v || "").slice(0, 5);
 const normalizePhone = (v) => String(v || "").replace(/@.*/, "").replace(/[^\d]/g, "").trim();
+const normalizeClientName = (v) => String(v || "").trim();
 
 const normalizeDate = (value, referenceDate = new Date()) => {
   if (!value) return null;
@@ -199,6 +200,15 @@ const getCompanyContextByInstanceName = async (instanceName, customerPhone = nul
   };
 };
 
+const getCompanyContextByCompanyId = async (companyId, customerPhone = null) => {
+  const config = await prisma.cONFIG_WHATSAPP.findFirst({
+    where: { id_empresa: Number(companyId) },
+  });
+
+  if (!config?.instance_name) return null;
+  return getCompanyContextByInstanceName(config.instance_name, customerPhone);
+};
+
 // â”€â”€â”€ List available slots â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const listAvailableSlots = async ({
   companyId,
@@ -330,6 +340,31 @@ const listAvailableSlots = async ({
 // â”€â”€â”€ Find or create client â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const findOrCreateClient = async ({ companyId, clientName, clientPhone }) => {
   const normalizedPhone = normalizePhone(clientPhone);
+  const normalizedName = normalizeClientName(clientName);
+
+  if (!normalizedPhone) {
+    if (!normalizedName) {
+      throw new Error("Falta el nombre del cliente para crear el turno.");
+    }
+
+    const existingByName = await prisma.cLIENTE.findFirst({
+      where: {
+        id_empresa: companyId,
+        nombre_wa: normalizedName,
+      },
+      orderBy: { id_cliente: "asc" },
+    });
+
+    if (existingByName) return existingByName;
+
+    return await prisma.cLIENTE.create({
+      data: {
+        id_empresa: companyId,
+        whatsapp_id: `manual-${companyId}-${Date.now()}`,
+        nombre_wa: normalizedName,
+      },
+    });
+  }
 
   const existing = await prisma.cLIENTE.findFirst({
     where: {
@@ -344,7 +379,7 @@ const findOrCreateClient = async ({ companyId, clientName, clientPhone }) => {
     data: {
       id_empresa: companyId,
       whatsapp_id: normalizedPhone,
-      nombre_wa: clientName || "Cliente WhatsApp",
+      nombre_wa: normalizedName || "Cliente WhatsApp",
     },
   });
 };
@@ -647,6 +682,7 @@ module.exports = {
   cancelAppointmentFromAssistant,
   cancelAppointmentByCompanyFromAssistant,
   createAppointmentFromAssistant,
+  getCompanyContextByCompanyId,
   getCompanyContextByInstanceName,
   isSlotStillBookable,
   listAvailableSlots,
