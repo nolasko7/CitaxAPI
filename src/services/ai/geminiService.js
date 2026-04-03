@@ -44,6 +44,12 @@ const GEMINI_MODEL = String(
   process.env.GEMINI_MODEL || "gemini-3-flash-preview",
 ).trim();
 const GEMINI_MAX_RETRIES = Number(process.env.GEMINI_MAX_RETRIES || 2);
+const GEMINI_HIGH_DEMAND_RETRY_DELAY_MS = Number(
+  process.env.GEMINI_HIGH_DEMAND_RETRY_DELAY_MS || 10_000,
+);
+const GEMINI_HIGH_DEMAND_MAX_RETRIES = Number(
+  process.env.GEMINI_HIGH_DEMAND_MAX_RETRIES || 4,
+);
 const GEMINI_PROVIDER_CONFIG = {
   name: "google-genai",
   label: `google-${GEMINI_MODEL}`,
@@ -851,6 +857,53 @@ const createGeminiModel = () => {
   return new ChatGoogleGenerativeAI(modelOptions);
 };
 
+const wait = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, Math.max(0, Number(ms) || 0));
+  });
+
+const isGeminiHighDemandError = (error) => {
+  const status = error?.response?.status || error?.status;
+  const message = String(error?.message || "").toLowerCase();
+
+  return (
+    status === 503 &&
+    (message.includes("currently experiencing high demand") ||
+      message.includes("experiencing high demand"))
+  );
+};
+
+const invokeWithGeminiHighDemandRetry = async (
+  operation,
+  {
+    provider = getGeminiConfig(),
+    operationLabel = "invocacion Gemini",
+    retryDelayMs = GEMINI_HIGH_DEMAND_RETRY_DELAY_MS,
+    maxRetries = GEMINI_HIGH_DEMAND_MAX_RETRIES,
+    sleep = wait,
+  } = {},
+) => {
+  let retryCount = 0;
+
+  while (true) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isGeminiHighDemandError(error) || retryCount >= maxRetries) {
+        throw error;
+      }
+
+      retryCount += 1;
+      console.warn(
+        `⚠️ Gemini con alta demanda (${provider.label}) durante ${operationLabel}. Reintentando en ${Math.round(
+          retryDelayMs / 1000,
+        )} segundos (${retryCount}/${maxRetries}).`,
+      );
+      await sleep(retryDelayMs);
+    }
+  }
+};
+
 const buildFinalReplyRecoveryMessages = (messages = []) => {
   return [
     ...(Array.isArray(messages) ? messages : []),
@@ -859,8 +912,13 @@ const buildFinalReplyRecoveryMessages = (messages = []) => {
 };
 
 const synthesizeFinalReplyFromMessages = async ({ messages }) => {
-  const recoveryResponse = await createGeminiModel().invoke(
-    buildFinalReplyRecoveryMessages(messages),
+  const recoveryModel = createGeminiModel();
+  const recoveryMessages = buildFinalReplyRecoveryMessages(messages);
+  const recoveryResponse = await invokeWithGeminiHighDemandRetry(
+    () => recoveryModel.invoke(recoveryMessages),
+    {
+      operationLabel: "la recuperacion de respuesta final",
+    },
   );
   const { reply } = extractAssistantReplyFromMessages([recoveryResponse]);
   return sanitizeNonReplyOutput(reply);
@@ -1373,7 +1431,13 @@ const invokeGeminiGraph = async ({ tools, messages }) => {
 
   try {
     const graph = createGraph({ tools });
-    const result = await graph.invoke({ messages });
+    const result = await invokeWithGeminiHighDemandRetry(
+      () => graph.invoke({ messages }),
+      {
+        provider,
+        operationLabel: "la ejecucion del grafo",
+      },
+    );
     const { reply } = extractAssistantReplyFromMessages(result.messages);
 
     if (!reply) {
@@ -1719,6 +1783,8 @@ module.exports = {
   runSupportAssistant,
   __testables: {
     getGeminiConfig,
+    isGeminiHighDemandError,
+    invokeWithGeminiHighDemandRetry,
     getConfiguredWelcomeMessage,
     extractAssistantReplyFromMessages,
     isClosingOnlyMessage,

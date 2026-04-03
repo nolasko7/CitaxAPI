@@ -6,6 +6,8 @@ const loadServiceWithEnv = (overrides = {}) => {
   const envKeys = [
     "GOOGLE_API_KEY",
     "GEMINI_MODEL",
+    "GEMINI_HIGH_DEMAND_RETRY_DELAY_MS",
+    "GEMINI_HIGH_DEMAND_MAX_RETRIES",
     "GEMINI_MAX_RETRIES",
     "WHATSAPP_AI_ENABLED",
   ];
@@ -443,6 +445,134 @@ test("ensureAppointmentConfirmationClosing appends the required closing phrase o
       preserved,
       "Listo, tu turno quedo confirmado para hoy lunes 31 a las 13:00. Cualquier consulta, no dudes en llamarme"
     );
+  } finally {
+    restore();
+  }
+});
+
+test("isGeminiHighDemandError detects Gemini 503 high-demand failures", () => {
+  const { service, restore } = loadServiceWithEnv({
+    GOOGLE_API_KEY: "google-test-key",
+  });
+
+  try {
+    assert.equal(
+      service.__testables.isGeminiHighDemandError({
+        status: 503,
+        message:
+          "[GoogleGenerativeAI Error]: [503 Service Unavailable] This model is currently experiencing high demand. Please try again later.",
+      }),
+      true
+    );
+    assert.equal(
+      service.__testables.isGeminiHighDemandError({
+        status: 503,
+        message: "Service unavailable for another reason",
+      }),
+      false
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("invokeWithGeminiHighDemandRetry retries up to 4 times with a 10 second fallback", async () => {
+  const { service, restore } = loadServiceWithEnv({
+    GOOGLE_API_KEY: "google-test-key",
+  });
+
+  try {
+    let attempts = 0;
+    const sleeps = [];
+    const result = await service.__testables.invokeWithGeminiHighDemandRetry(
+      async () => {
+        attempts += 1;
+
+        if (attempts < 5) {
+          const error = new Error(
+            "[GoogleGenerativeAI Error]: [503 Service Unavailable] This model is currently experiencing high demand. Please try again later."
+          );
+          error.status = 503;
+          throw error;
+        }
+
+        return "ok";
+      },
+      {
+        provider: { label: "google-gemini-3-flash-preview" },
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      }
+    );
+
+    assert.equal(result, "ok");
+    assert.equal(attempts, 5);
+    assert.deepEqual(sleeps, [10000, 10000, 10000, 10000]);
+  } finally {
+    restore();
+  }
+});
+
+test("invokeWithGeminiHighDemandRetry stops after the configured 4 retries", async () => {
+  const { service, restore } = loadServiceWithEnv({
+    GOOGLE_API_KEY: "google-test-key",
+  });
+
+  try {
+    let attempts = 0;
+    await assert.rejects(() =>
+      service.__testables.invokeWithGeminiHighDemandRetry(
+        async () => {
+          attempts += 1;
+          const highDemandError = new Error(
+            "[GoogleGenerativeAI Error]: [503 Service Unavailable] This model is currently experiencing high demand. Please try again later."
+          );
+          highDemandError.status = 503;
+          throw highDemandError;
+        },
+        {
+          provider: { label: "google-gemini-3-flash-preview" },
+          sleep: async () => {},
+        }
+      ),
+      (error) => error?.status === 503
+    );
+
+    assert.equal(attempts, 5);
+  } finally {
+    restore();
+  }
+});
+
+test("invokeWithGeminiHighDemandRetry does not retry unrelated errors", async () => {
+  const { service, restore } = loadServiceWithEnv({
+    GOOGLE_API_KEY: "google-test-key",
+  });
+
+  try {
+    let attempts = 0;
+    const sleeps = [];
+    await assert.rejects(() =>
+      service.__testables.invokeWithGeminiHighDemandRetry(
+        async () => {
+          attempts += 1;
+          const genericError = new Error("Bad request");
+          genericError.status = 400;
+          throw genericError;
+        },
+        {
+          provider: { label: "google-gemini-3-flash-preview" },
+          sleep: async (ms) => {
+            sleeps.push(ms);
+          },
+        }
+      ),
+      (error) => error?.status === 400
+    );
+
+    assert.equal(attempts, 1);
+    assert.deepEqual(sleeps, []);
   } finally {
     restore();
   }
