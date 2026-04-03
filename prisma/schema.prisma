@@ -39,6 +39,7 @@ model EMPRESA {
   config_recordatorios    Json?
   CLIENTE                 CLIENTE[]
   CONFIG_WHATSAPP         CONFIG_WHATSAPP?
+  NOTIFICACION            Notification[]
   USUARIO                 USUARIO          @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade, onUpdate: NoAction, map: "fk_empresa_usuario")
   PRESTADOR               PRESTADOR[]
   SERVICIO                SERVICIO[]
@@ -102,12 +103,31 @@ model TURNO {
   fecha_hora   DateTime  @db.DateTime(0)
   estado       String    @default("pendiente") @db.VarChar(50)
   CLIENTE      CLIENTE   @relation(fields: [id_cliente], references: [id_cliente], onDelete: Cascade, onUpdate: NoAction, map: "fk_turno_cliente")
+  NOTIFICACION Notification[]
   PRESTADOR    PRESTADOR @relation(fields: [id_prestador], references: [id_prestador], onDelete: Cascade, onUpdate: NoAction, map: "fk_turno_prestador")
   SERVICIO     SERVICIO  @relation(fields: [id_servicio], references: [id_servicio], onDelete: Cascade, onUpdate: NoAction, map: "fk_turno_servicio")
 
   @@index([id_cliente], map: "fk_turno_cliente")
   @@index([id_prestador], map: "fk_turno_prestador")
   @@index([id_servicio], map: "fk_turno_servicio")
+}
+
+model Notification {
+  id           Int       @id @default(autoincrement()) @map("id_notificacion")
+  companyId    Int       @map("id_empresa")
+  type         String    @db.VarChar(50) @map("tipo")
+  title        String    @db.VarChar(255) @map("titulo")
+  description  String?   @db.Text @map("descripcion")
+  metadata     Json?
+  appointmentId Int?     @map("appointment_id")
+  readAt       DateTime? @db.DateTime(0) @map("read_at")
+  createdAt    DateTime  @default(now()) @db.DateTime(0) @map("created_at")
+  EMPRESA      EMPRESA   @relation(fields: [companyId], references: [id_empresa], onDelete: Cascade, onUpdate: NoAction, map: "fk_notificacion_empresa")
+  TURNO        TURNO?    @relation(fields: [appointmentId], references: [id_turno], onDelete: SetNull, onUpdate: NoAction, map: "fk_notificacion_turno")
+
+  @@index([companyId, createdAt], map: "idx_notificacion_empresa_created")
+  @@index([companyId, readAt], map: "idx_notificacion_empresa_read")
+  @@map("NOTIFICACION")
 }
 
 model USUARIO {

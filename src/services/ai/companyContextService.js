@@ -9,6 +9,10 @@ const {
   isSingleProviderModeEnabledForConfig,
   normalizeOwnPhrasesConfig,
 } = require("../singleProviderMode.service");
+const {
+  createBookingNotification,
+  NOTIFICATION_TYPES,
+} = require("../notification.service");
 
 const DEFAULT_TIMEZONE = "America/Argentina/Buenos_Aires";
 
@@ -471,6 +475,24 @@ const createAppointmentFromAssistant = async ({ companyId, professionalId, clien
     },
   });
 
+  try {
+    await createBookingNotification({
+      companyId,
+      type: NOTIFICATION_TYPES.NEW_BOOKING,
+      appointmentId: turno.id_turno,
+      clientName: client.nombre_wa || clientName,
+      serviceName: servicio.nombre,
+      professionalName: `${prestador.USUARIO.nombre} ${prestador.USUARIO.apellido}`,
+      date: normalizedDate,
+      time: normalizedTime,
+      metadata: {
+        source: "assistant",
+      },
+    });
+  } catch (notificationError) {
+    console.error("No se pudo crear la notificacion de nueva reserva:", notificationError.message);
+  }
+
   return {
     appointmentId: turno.id_turno,
     professionalName: `${prestador.USUARIO.nombre} ${prestador.USUARIO.apellido}`,
@@ -540,6 +562,24 @@ const cancelAppointmentFromAssistant = async ({ companyId, clientPhone, date, ti
     where: { id_turno: appointment.id_turno },
     data: { estado: "cancelado" },
   });
+
+  try {
+    await createBookingNotification({
+      companyId,
+      type: NOTIFICATION_TYPES.BOOKING_CANCELLED,
+      appointmentId: appointment.id_turno,
+      clientName: client.nombre_wa || "Sin nombre",
+      serviceName: "Turno",
+      professionalName: "",
+      date: appointment.fecha_hora.toISOString().slice(0, 10),
+      time: `${pad(appointment.fecha_hora.getUTCHours())}:${pad(appointment.fecha_hora.getUTCMinutes())}`,
+      metadata: {
+        source: "assistant_customer",
+      },
+    });
+  } catch (notificationError) {
+    console.error("No se pudo crear la notificacion de cancelacion:", notificationError.message);
+  }
 
   return {
     status: "cancelled",
@@ -670,6 +710,24 @@ const cancelAppointmentByCompanyFromAssistant = async ({
     where: { id_turno: appointment.id_turno },
     data: { estado: "cancelado" },
   });
+
+  try {
+    await createBookingNotification({
+      companyId,
+      type: NOTIFICATION_TYPES.BOOKING_CANCELLED,
+      appointmentId: appointment.id_turno,
+      clientName: appointment.CLIENTE?.nombre_wa || "Sin nombre",
+      serviceName: appointment.SERVICIO?.nombre || "Turno",
+      professionalName: `${appointment.PRESTADOR?.USUARIO?.nombre || ""} ${appointment.PRESTADOR?.USUARIO?.apellido || ""}`.trim(),
+      date: appointment.fecha_hora.toISOString().slice(0, 10),
+      time: `${pad(appointment.fecha_hora.getUTCHours())}:${pad(appointment.fecha_hora.getUTCMinutes())}`,
+      metadata: {
+        source: "assistant_company",
+      },
+    });
+  } catch (notificationError) {
+    console.error("No se pudo crear la notificacion de cancelacion:", notificationError.message);
+  }
 
   return {
     status: "cancelled",

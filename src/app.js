@@ -6,6 +6,7 @@ const availabilityRoutes = require('./routes/availability.routes');
 const configRoutes = require('./routes/config.routes');
 const servicesRoutes = require('./routes/services.routes');
 const professionalsRoutes = require('./routes/professionals.routes');
+const notificationsRoutes = require('./routes/notifications.routes');
 const whatsappRoutes = require('./routes/whatsapp.routes');
 const superadminRoutes = require('./routes/superadmin.routes');
 
@@ -40,6 +41,7 @@ app.use('/api/availability', availabilityRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/services', servicesRoutes);
 app.use('/api/professionals', professionalsRoutes);
+app.use('/api/notifications', notificationsRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/superadmin', superadminRoutes);
 app.post('/api/webhook', require('./controllers/whatsapp.controller').handleWebhook);

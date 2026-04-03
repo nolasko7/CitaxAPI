@@ -13,6 +13,9 @@ const {
   registerWebhook,
   storeLatestQr,
 } = require("../services/evolution.service");
+const {
+  createSystemErrorNotification,
+} = require("../services/notification.service");
 
 // Helper to save or update CONFIG_WHATSAPP
 const persistWhatsappInstance = async ({
@@ -49,6 +52,34 @@ const persistWhatsappInstance = async ({
     });
     invalidateCompanyInternalPhonesCache();
     return created;
+  }
+};
+
+const notifySystemErrorForInstance = async (
+  instanceName,
+  description,
+  metadata = null,
+) => {
+  if (!instanceName || !description) return;
+
+  try {
+    const config = await prisma.cONFIG_WHATSAPP.findFirst({
+      where: { instance_name: instanceName },
+      select: { id_empresa: true },
+    });
+
+    if (!config?.id_empresa) return;
+
+    await createSystemErrorNotification({
+      companyId: config.id_empresa,
+      description,
+      metadata,
+    });
+  } catch (notificationError) {
+    console.error(
+      "Error creando notificacion de sistema:",
+      notificationError.message,
+    );
   }
 };
 
@@ -261,8 +292,16 @@ const handleWebhook = async (req, res, next) => {
       } = require("../services/evolution.service");
 
       processIncomingMessage({ instanceName, webhookData: payload }).catch(
-        (err) => {
+        async (err) => {
           console.error("Error procesando webhook:", err.message);
+          await notifySystemErrorForInstance(
+            instanceName,
+            err.message || "Falló el procesamiento del webhook de WhatsApp.",
+            {
+              source: "whatsapp_webhook",
+              event: payload?.event || "messages.upsert",
+            },
+          );
         },
       );
     }

@@ -6,5 +6,6 @@ require("./geminiService.test");
 require("./slotPresentation.test");
 require("./availabilitySchedule.test");
 require("./companyContextService.test");
+require("./notification.service.test");
 require("./singleProviderMode.service.test");
 require("./superadminAuth.service.test");
