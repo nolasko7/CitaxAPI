@@ -42,49 +42,109 @@ const getNowInTimezone = (timezone = DEFAULT_TIMEZONE) => {
   const parts = {};
   new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-  }).formatToParts(new Date()).forEach(p => { parts[p.type] = p.value; });
-  return new Date(`${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`);
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  })
+    .formatToParts(new Date())
+    .forEach((part) => {
+      parts[part.type] = part.value;
+    });
+
+  return new Date(
+    `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}Z`
+  );
 };
 
-const pad = (v) => String(v).padStart(2, "0");
-const formatTime = (v) => String(v || "").slice(0, 5);
-const normalizePhone = (v) => String(v || "").replace(/@.*/, "").replace(/[^\d]/g, "").trim();
+const isSlotStillBookable = ({ slotEnd, now = getNowInTimezone() }) => {
+  if (!(slotEnd instanceof Date) || Number.isNaN(slotEnd.getTime())) return false;
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) return false;
+  return slotEnd > now;
+};
+
+const pad = (value) => String(value).padStart(2, "0");
+const formatTime = (value) => String(value || "").slice(0, 5);
+const normalizePhone = (value) =>
+  String(value || "").replace(/@.*/, "").replace(/[^\d]/g, "").trim();
+const normalizeClientName = (value) => String(value || "").trim();
 
 const normalizeDate = (value, referenceDate = new Date()) => {
   if (!value) return null;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+
   const raw = String(value).trim();
   if (!raw) return null;
+
   const lower = raw.toLowerCase();
+  const getReference = () =>
+    typeof referenceDate === "string"
+      ? new Date(`${referenceDate}T12:00:00`)
+      : new Date(referenceDate);
 
-  const getRef = () => typeof referenceDate === "string" ? new Date(`${referenceDate}T12:00:00`) : new Date(referenceDate);
+  if (lower === "hoy") return normalizeDate(getReference());
+  if (lower === "ma�ana" || lower === "manana") {
+    const date = getReference();
+    date.setDate(date.getDate() + 1);
+    return normalizeDate(date);
+  }
+  if (lower === "pasado ma�ana" || lower === "pasado manana") {
+    const date = getReference();
+    date.setDate(date.getDate() + 2);
+    return normalizeDate(date);
+  }
 
-  if (lower === "hoy") return normalizeDate(getRef());
-  if (lower === "mañana" || lower === "manana") { const d = getRef(); d.setDate(d.getDate() + 1); return normalizeDate(d); }
-  if (lower === "pasado mañana" || lower === "pasado manana") { const d = getRef(); d.setDate(d.getDate() + 2); return normalizeDate(d); }
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  }
 
-  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-
-  const d = new Date(raw);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime())
+    ? null
+    : parsed.toISOString().slice(0, 10);
 };
 
-const addDays = (dateStr, days) => { const d = new Date(`${dateStr}T00:00:00`); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); };
-const toWeekdayNumber = (dateStr) => { const d = new Date(`${dateStr}T00:00:00`).getDay(); return d === 0 ? 7 : d; };
-const combineDateTime = (dateStr, timeStr) => new Date(`${dateStr}T${timeStr}:00`);
-const overlaps = (s1, e1, s2, e2) => s1 < e2 && s2 < e1;
+const addDays = (dateStr, days) => {
+  const date = new Date(`${dateStr}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
 
-// ─── Get company context by instance name ─────────────────────────────
-const getCompanyContextByInstanceName = async (instanceName, customerPhone = null) => {
+const toWeekdayNumber = (dateStr) => {
+  const weekday = new Date(`${dateStr}T12:00:00Z`).getUTCDay();
+  return weekday === 0 ? 7 : weekday;
+};
+
+const combineDateTime = (dateStr, timeStr) =>
+  new Date(`${dateStr}T${timeStr}:00Z`);
+
+const overlaps = (startA, endA, startB, endB) =>
+  startA < endB && startB < endA;
+
+const normalizeSearchText = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+const getCompanyContextByInstanceName = async (
+  instanceName,
+  customerPhone = null
+) => {
   const config = await prisma.cONFIG_WHATSAPP.findFirst({
     where: { instance_name: instanceName },
     include: {
       EMPRESA: {
         include: {
           PRESTADOR: {
+            where: { activo: true },
             include: {
               USUARIO: true,
               SERVICIOS: { include: { SERVICIO: true } },
@@ -99,38 +159,33 @@ const getCompanyContextByInstanceName = async (instanceName, customerPhone = nul
   if (!config || !config.EMPRESA) return null;
 
   const empresa = config.EMPRESA;
-  let botConfig = empresa.bot_config || {};
-
-  // Si Prisma no está actualizado localmente, buscamos el campo con queryRaw
-  if (typeof empresa.bot_config === 'undefined') {
-    try {
-      const rows = await prisma.$queryRaw`SELECT bot_config FROM EMPRESA WHERE id_empresa = ${empresa.id_empresa}`;
-      if (rows && rows.length > 0 && rows[0].bot_config) {
-        botConfig = rows[0].bot_config;
-        if (typeof botConfig === 'string') botConfig = JSON.parse(botConfig);
-      }
-    } catch (e) { console.error("Error obteniendo bot_config:", e); }
-  }
-
   const horarios = empresa.horarios_disponibilidad || {};
 
-  const professionals = empresa.PRESTADOR.map((p) => ({
-    id: p.id_prestador,
-    name: `${p.USUARIO.nombre} ${p.USUARIO.apellido}`,
-    services: p.SERVICIOS.map((ps) => ({
-      id: ps.SERVICIO.id_servicio,
-      name: ps.SERVICIO.nombre,
-      duration: ps.SERVICIO.duracion_minutos,
-      price: Number(ps.SERVICIO.precio),
+  const professionals = empresa.PRESTADOR.map((prestador) => ({
+    id: prestador.id_prestador,
+    name: `${prestador.USUARIO.nombre} ${prestador.USUARIO.apellido}`,
+    services: prestador.SERVICIOS.map((prestadorServicio) => ({
+      id: prestadorServicio.SERVICIO.id_servicio,
+      name: prestadorServicio.SERVICIO.nombre,
+      duration: prestadorServicio.SERVICIO.duracion_minutos,
+      price: Number(prestadorServicio.SERVICIO.precio),
     })),
+    horarios_disponibilidad: prestador.horarios_disponibilidad || null,
+    availability: resolveEffectiveAvailability({
+      ownConfig: prestador.horarios_disponibilidad,
+      companyConfig: empresa.horarios_disponibilidad,
+    }),
+    usesFallbackAvailability: isNullishAvailability(
+      prestador.horarios_disponibilidad
+    ),
   }));
 
-  const services = empresa.SERVICIO.map((s) => ({
-    id: s.id_servicio,
-    name: s.nombre,
-    description: s.descripcion,
-    duration: s.duracion_minutos,
-    price: Number(s.precio),
+  const services = empresa.SERVICIO.map((service) => ({
+    id: service.id_servicio,
+    name: service.nombre,
+    description: service.descripcion,
+    duration: service.duracion_minutos,
+    price: Number(service.precio),
   }));
 
   let customerPendingAppointments = [];
@@ -145,7 +200,7 @@ const getCompanyContextByInstanceName = async (instanceName, customerPhone = nul
 
     if (client) {
       const now = new Date();
-      const pending = await prisma.tURNO.findMany({
+      const pendingAppointments = await prisma.tURNO.findMany({
         where: {
           id_cliente: client.id_cliente,
           estado: "pendiente",
@@ -158,15 +213,33 @@ const getCompanyContextByInstanceName = async (instanceName, customerPhone = nul
         orderBy: { fecha_hora: "asc" },
       });
 
-      customerPendingAppointments = pending.map((t) => ({
-        id: t.id_turno,
-        date: t.fecha_hora.toISOString().slice(0, 10),
-        time: formatTime(`${pad(t.fecha_hora.getHours())}:${pad(t.fecha_hora.getMinutes())}`),
-        service: t.SERVICIO.nombre,
-        professional: `${t.PRESTADOR.USUARIO.nombre} ${t.PRESTADOR.USUARIO.apellido}`,
+      customerPendingAppointments = pendingAppointments.map((appointment) => ({
+        id: appointment.id_turno,
+        date: appointment.fecha_hora.toISOString().slice(0, 10),
+        time: formatTime(
+          `${pad(appointment.fecha_hora.getUTCHours())}:${pad(
+            appointment.fecha_hora.getUTCMinutes()
+          )}`
+        ),
+        service: appointment.SERVICIO.nombre,
+        professional: `${appointment.PRESTADOR.USUARIO.nombre} ${appointment.PRESTADOR.USUARIO.apellido}`,
       }));
     }
   }
+
+  const botConfig = await getCompanyBotConfig(empresa.id_empresa).catch(
+    () => ({})
+  );
+  const singleProviderMode =
+    isSingleProviderModeEnabledForConfig(botConfig);
+
+  const primerPersonaActiva =
+    professionals.length === 1 &&
+    (singleProviderMode || botConfig.primera_persona === true);
+
+  const personaName = primerPersonaActiva
+    ? professionals[0].name
+    : professionals[0]?.name || empresa.nombre_comercial;
 
   return {
     companyId: empresa.id_empresa,
@@ -181,16 +254,40 @@ const getCompanyContextByInstanceName = async (instanceName, customerPhone = nul
     professionals,
     services,
     horarios,
-    botConfig,
     customerPendingAppointments,
-    assistantPersonaName: professionals[0]?.name || empresa.nombre_comercial,
+    assistantPersonaName: personaName,
+    welcomeMessage: String(botConfig?.mensaje_bienvenida || "").trim(),
+    ownPhrases: normalizeOwnPhrasesConfig(botConfig?.palabras_propias),
+    singleProviderMode,
+    primerPersonaActiva,
   };
 };
 
-// ─── List available slots ─────────────────────────────────────────────
-const listAvailableSlots = async ({ companyId, professionalName, startDate, endDate, referenceDate, limit = 100 }) => {
-  const normalizedStart = normalizeDate(startDate, referenceDate) || normalizeDate(referenceDate) || new Date().toISOString().slice(0, 10);
-  const normalizedEnd = normalizeDate(endDate, referenceDate) || addDays(normalizedStart, 14);
+const getCompanyContextByCompanyId = async (companyId, customerPhone = null) => {
+  const config = await prisma.cONFIG_WHATSAPP.findFirst({
+    where: { id_empresa: Number(companyId) },
+  });
+
+  if (!config?.instance_name) return null;
+  return getCompanyContextByInstanceName(config.instance_name, customerPhone);
+};
+
+const listAvailableSlots = async ({
+  companyId,
+  professionalId = null,
+  professionalName,
+  serviceId = null,
+  startDate,
+  endDate,
+  referenceDate,
+  limit = 30,
+}) => {
+  const normalizedStart =
+    normalizeDate(startDate, referenceDate) ||
+    normalizeDate(referenceDate) ||
+    getCurrentDateInTimeZone();
+  const normalizedEnd =
+    normalizeDate(endDate, referenceDate) || addDays(normalizedStart, 14);
 
   const empresa = await prisma.eMPRESA.findUnique({
     where: { id_empresa: companyId },
@@ -207,53 +304,82 @@ const listAvailableSlots = async ({ companyId, professionalName, startDate, endD
 
   if (!empresa) return [];
 
-  // Parse horarios_disponibilidad — format: { config: [{ dia_semana, hora_desde, hora_hasta, activo }] }
-  const horariosRaw = empresa.horarios_disponibilidad || {};
-  const horariosConfig = Array.isArray(horariosRaw.config) ? horariosRaw.config : [];
+  const companyConfig = empresa.horarios_disponibilidad;
+  let prestadores = empresa.PRESTADOR;
 
-  // Build a map: dia_semana (1-7) -> [{ start, end }]
-  const horariosMap = {};
-  for (const h of horariosConfig) {
-    if (h.activo && h.hora_desde && h.hora_hasta) {
-      const day = Number(h.dia_semana);
-      if (!horariosMap[day]) horariosMap[day] = [];
-      horariosMap[day].push({ start: h.hora_desde, end: h.hora_hasta });
-    }
+  if (professionalId) {
+    prestadores = prestadores.filter(
+      (prestador) => Number(prestador.id_prestador) === Number(professionalId)
+    );
   }
 
-  let prestadores = empresa.PRESTADOR;
   if (professionalName) {
-    const normalizedSearch = professionalName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    prestadores = prestadores.filter((p) => {
-      const fullName = `${p.USUARIO.nombre} ${p.USUARIO.apellido}`.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const normalizedSearch = normalizeSearchText(professionalName);
+    prestadores = prestadores.filter((prestador) => {
+      const fullName = normalizeSearchText(
+        `${prestador.USUARIO.nombre} ${prestador.USUARIO.apellido}`
+      );
       return fullName.includes(normalizedSearch);
     });
+  }
+
+  if (serviceId) {
+    prestadores = prestadores.filter((prestador) =>
+      prestador.SERVICIOS.some(
+        (prestadorServicio) =>
+          Number(prestadorServicio.SERVICIO.id_servicio) === Number(serviceId)
+      )
+    );
   }
 
   if (!prestadores.length) return [];
 
   const existingTurnos = await prisma.tURNO.findMany({
     where: {
-      id_prestador: { in: prestadores.map((p) => p.id_prestador) },
+      id_prestador: { in: prestadores.map((prestador) => prestador.id_prestador) },
       estado: { in: ["pendiente", "confirmado"] },
       fecha_hora: {
-        gte: new Date(`${normalizedStart}T00:00:00`),
-        lte: new Date(`${normalizedEnd}T23:59:59`),
+        gte: new Date(`${normalizedStart}T00:00:00Z`),
+        lte: new Date(`${normalizedEnd}T23:59:59Z`),
       },
     },
     include: { SERVICIO: true },
   });
 
+  const prestadoresConAgenda = prestadores.map((prestador) => {
+    const availability = resolveEffectiveAvailability({
+      ownConfig: prestador.horarios_disponibilidad,
+      companyConfig,
+    });
+
+    return {
+      ...prestador,
+      availability,
+      availabilityMap: buildAvailabilityMap(availability.config),
+    };
+  });
+
   const slots = [];
   const defaultDuration = 30;
 
-  for (let cursor = normalizedStart; cursor <= normalizedEnd; cursor = addDays(cursor, 1)) {
+  for (
+    let cursor = normalizedStart;
+    cursor <= normalizedEnd;
+    cursor = addDays(cursor, 1)
+  ) {
     const weekday = toWeekdayNumber(cursor);
-    const daySchedules = horariosMap[weekday];
-    if (!daySchedules || !daySchedules.length) continue;
 
-    for (const prestador of prestadores) {
-      const duration = prestador.SERVICIOS[0]?.SERVICIO?.duracion_minutos || defaultDuration;
+    for (const prestador of prestadoresConAgenda) {
+      const selectedService = serviceId
+        ? prestador.SERVICIOS.find(
+            (prestadorServicio) =>
+              Number(prestadorServicio.SERVICIO.id_servicio) === Number(serviceId)
+          )?.SERVICIO
+        : prestador.SERVICIOS[0]?.SERVICIO;
+      const duration = selectedService?.duracion_minutos || defaultDuration;
+      const daySchedules = prestador.availabilityMap[weekday];
+
+      if (!daySchedules || !daySchedules.length) continue;
 
       for (const daySchedule of daySchedules) {
         let slotStart = combineDateTime(cursor, daySchedule.start);
@@ -264,25 +390,35 @@ const listAvailableSlots = async ({ companyId, professionalName, startDate, endD
 
           if (slotEnd > dayEnd) break;
 
-          const isBusy = existingTurnos.some((t) => {
-            if (t.id_prestador !== prestador.id_prestador) return false;
-            const tStart = new Date(t.fecha_hora);
-            const tEnd = new Date(tStart.getTime() + (t.SERVICIO?.duracion_minutos || 30) * 60000);
-            return overlaps(slotStart, slotEnd, tStart, tEnd);
+          const isBusy = existingTurnos.some((turno) => {
+            if (turno.id_prestador !== prestador.id_prestador) return false;
+
+            const turnoStart = new Date(turno.fecha_hora);
+            const turnoEnd = new Date(
+              turnoStart.getTime() +
+                (turno.SERVICIO?.duracion_minutos || 30) * 60000
+            );
+
+            return overlaps(slotStart, slotEnd, turnoStart, turnoEnd);
           });
 
-          if (!isBusy && slotStart >= getNowInTimezone()) {
+          if (!isBusy && isSlotStillBookable({ slotEnd })) {
             slots.push({
               professionalId: prestador.id_prestador,
               professionalName: `${prestador.USUARIO.nombre} ${prestador.USUARIO.apellido}`,
               date: cursor,
-              time: `${pad(slotStart.getHours())}:${pad(slotStart.getMinutes())}`,
-              endTime: `${pad(slotEnd.getHours())}:${pad(slotEnd.getMinutes())}`,
+              time: `${pad(slotStart.getUTCHours())}:${pad(
+                slotStart.getUTCMinutes()
+              )}`,
+              endTime: `${pad(slotEnd.getUTCHours())}:${pad(
+                slotEnd.getUTCMinutes()
+              )}`,
               duration,
+              scheduleSource: prestador.availability.source,
             });
           }
 
-          slotStart = new Date(slotStart.getTime() + (duration >= 15 ? duration : 30) * 60000);
+          slotStart = new Date(slotStart.getTime() + duration * 60000);
           if (slots.length >= limit) return slots;
         }
       }
@@ -292,9 +428,33 @@ const listAvailableSlots = async ({ companyId, professionalName, startDate, endD
   return slots;
 };
 
-// ─── Find or create client ────────────────────────────────────────────
 const findOrCreateClient = async ({ companyId, clientName, clientPhone }) => {
   const normalizedPhone = normalizePhone(clientPhone);
+  const normalizedName = normalizeClientName(clientName);
+
+  if (!normalizedPhone) {
+    if (!normalizedName) {
+      throw new Error("Falta el nombre del cliente para crear el turno.");
+    }
+
+    const existingByName = await prisma.cLIENTE.findFirst({
+      where: {
+        id_empresa: companyId,
+        nombre_wa: normalizedName,
+      },
+      orderBy: { id_cliente: "asc" },
+    });
+
+    if (existingByName) return existingByName;
+
+    return prisma.cLIENTE.create({
+      data: {
+        id_empresa: companyId,
+        whatsapp_id: `manual-${companyId}-${Date.now()}`,
+        nombre_wa: normalizedName,
+      },
+    });
+  }
 
   const existing = await prisma.cLIENTE.findFirst({
     where: {
@@ -305,21 +465,31 @@ const findOrCreateClient = async ({ companyId, clientName, clientPhone }) => {
 
   if (existing) return existing;
 
-  return await prisma.cLIENTE.create({
+  return prisma.cLIENTE.create({
     data: {
       id_empresa: companyId,
       whatsapp_id: normalizedPhone,
-      nombre_wa: clientName || "Cliente WhatsApp",
+      nombre_wa: normalizedName || "Cliente WhatsApp",
     },
   });
 };
 
-// ─── Create appointment from assistant ────────────────────────────────
-const createAppointmentFromAssistant = async ({ companyId, professionalId, clientName, clientPhone, serviceId, date, time, referenceDate }) => {
+const createAppointmentFromAssistant = async ({
+  companyId,
+  professionalId,
+  clientName,
+  clientPhone,
+  serviceId,
+  date,
+  time,
+  referenceDate,
+}) => {
   const normalizedDate = normalizeDate(date, referenceDate);
   const normalizedTime = formatTime(time);
 
-  if (!normalizedDate || !normalizedTime) throw new Error("Fecha u hora inválidas");
+  if (!normalizedDate || !normalizedTime) {
+    throw new Error("Fecha u hora invalidas");
+  }
 
   const prestador = await prisma.pRESTADOR.findUnique({
     where: { id_prestador: professionalId },
@@ -332,21 +502,53 @@ const createAppointmentFromAssistant = async ({ companyId, professionalId, clien
     const defaultService = await prisma.pRESTADOR_SERVICIO.findFirst({
       where: { id_prestador: professionalId },
     });
-    if (defaultService) resolvedServiceId = defaultService.id_servicio;
-    else {
-      const anyService = await prisma.sERVICIO.findFirst({ where: { id_empresa: companyId } });
-      if (anyService) resolvedServiceId = anyService.id_servicio;
-      else throw new Error("No hay servicios configurados");
+
+    if (defaultService) {
+      resolvedServiceId = defaultService.id_servicio;
+    } else {
+      const anyService = await prisma.sERVICIO.findFirst({
+        where: { id_empresa: companyId },
+      });
+      if (anyService) {
+        resolvedServiceId = anyService.id_servicio;
+      } else {
+        throw new Error("No hay servicios configurados");
+      }
     }
   }
 
-  const servicio = await prisma.sERVICIO.findUnique({ where: { id_servicio: resolvedServiceId } });
+  const validSlotsInfo = await listAvailableSlots({
+    companyId,
+    professionalId,
+    serviceId: resolvedServiceId,
+    startDate: normalizedDate,
+    endDate: normalizedDate,
+    referenceDate,
+    limit: 150,
+  });
+
+  const slotIsValid = validSlotsInfo.some(
+    (slot) =>
+      Number(slot.professionalId) === Number(professionalId) &&
+      slot.date === normalizedDate &&
+      slot.time === normalizedTime
+  );
+
+  if (!slotIsValid) {
+    throw new Error(
+      `El horario solicitado (${normalizedDate} a las ${normalizedTime}) no forma parte de la jornada laboral o ya caduco. Usa la herramienta find_available_slots para ver que horarios si estan disponibles y ofrecerlos.`
+    );
+  }
+
+  const servicio = await prisma.sERVICIO.findUnique({
+    where: { id_servicio: resolvedServiceId },
+  });
   if (!servicio) throw new Error("Servicio no encontrado");
 
   const duration = servicio.duracion_minutos || 30;
-  const fechaHora = new Date(`${normalizedDate}T${normalizedTime}:00`);
-
+  const fechaHora = new Date(`${normalizedDate}T${normalizedTime}:00Z`);
   const endTime = new Date(fechaHora.getTime() + duration * 60000);
+
   const existing = await prisma.tURNO.findFirst({
     where: {
       id_prestador: professionalId,
@@ -358,9 +560,15 @@ const createAppointmentFromAssistant = async ({ companyId, professionalId, clien
     },
   });
 
-  if (existing) throw new Error("Ese horario ya no está disponible. Probá con otro.");
+  if (existing) {
+    throw new Error("Ese horario ya no esta disponible. Proba con otro.");
+  }
 
-  const client = await findOrCreateClient({ companyId, clientName, clientPhone });
+  const client = await findOrCreateClient({
+    companyId,
+    clientName,
+    clientPhone,
+  });
 
   const turnoData = {
     id_cliente: client.id_cliente,
@@ -385,15 +593,20 @@ const createAppointmentFromAssistant = async ({ companyId, professionalId, clien
     clientName: client.nombre_wa || clientName,
     date: normalizedDate,
     time: normalizedTime,
-    endTime: `${pad(endTime.getHours())}:${pad(endTime.getMinutes())}`,
+    endTime: `${pad(endTime.getUTCHours())}:${pad(endTime.getUTCMinutes())}`,
     companyId,
     professionalId,
     serviceId: resolvedServiceId,
   };
 };
 
-// ─── Cancel appointment ───────────────────────────────────────────────
-const cancelAppointmentFromAssistant = async ({ companyId, clientPhone, date, time, referenceDate }) => {
+const cancelAppointmentFromAssistant = async ({
+  companyId,
+  clientPhone,
+  date,
+  time,
+  referenceDate,
+}) => {
   const normalizedPhone = normalizePhone(clientPhone);
   const normalizedDate = date ? normalizeDate(date, referenceDate) : null;
   const normalizedTime = time ? formatTime(time) : null;
@@ -405,12 +618,12 @@ const cancelAppointmentFromAssistant = async ({ companyId, clientPhone, date, ti
     },
   });
 
-  if (!client) throw new Error("No encontré tu registro de cliente.");
+  if (!client) throw new Error("No encontre tu registro de cliente.");
 
   const where = {
     id_cliente: client.id_cliente,
     estado: { in: ["pendiente", "confirmado"] },
-    fecha_hora: { gte: new Date() },
+    fecha_hora: { gte: getNowInTimezone() },
   };
 
   const appointments = await prisma.tURNO.findMany({
@@ -420,24 +633,33 @@ const cancelAppointmentFromAssistant = async ({ companyId, clientPhone, date, ti
 
   let filtered = appointments;
   if (normalizedDate) {
-    filtered = filtered.filter((a) => a.fecha_hora.toISOString().slice(0, 10) === normalizedDate);
+    filtered = filtered.filter(
+      (appointment) =>
+        appointment.fecha_hora.toISOString().slice(0, 10) === normalizedDate
+    );
   }
   if (normalizedTime) {
-    filtered = filtered.filter((a) => {
-      const t = `${pad(a.fecha_hora.getHours())}:${pad(a.fecha_hora.getMinutes())}`;
-      return t === normalizedTime;
+    filtered = filtered.filter((appointment) => {
+      const slotTime = `${pad(appointment.fecha_hora.getUTCHours())}:${pad(
+        appointment.fecha_hora.getUTCMinutes()
+      )}`;
+      return slotTime === normalizedTime;
     });
   }
 
-  if (!filtered.length) throw new Error("No encontré ningún turno pendiente para cancelar.");
+  if (!filtered.length) {
+    throw new Error("No encontre ningun turno pendiente para cancelar.");
+  }
 
   if (filtered.length > 1 && (!normalizedDate || !normalizedTime)) {
     return {
       status: "multiple_found",
-      appointments: filtered.map((a) => ({
-        id: a.id_turno,
-        date: a.fecha_hora.toISOString().slice(0, 10),
-        time: `${pad(a.fecha_hora.getHours())}:${pad(a.fecha_hora.getMinutes())}`,
+      appointments: filtered.map((appointment) => ({
+        id: appointment.id_turno,
+        date: appointment.fecha_hora.toISOString().slice(0, 10),
+        time: `${pad(appointment.fecha_hora.getUTCHours())}:${pad(
+          appointment.fecha_hora.getUTCMinutes()
+        )}`,
       })),
     };
   }
@@ -452,17 +674,19 @@ const cancelAppointmentFromAssistant = async ({ companyId, clientPhone, date, ti
     status: "cancelled",
     appointmentId: appointment.id_turno,
     date: appointment.fecha_hora.toISOString().slice(0, 10),
-    time: `${pad(appointment.fecha_hora.getHours())}:${pad(appointment.fecha_hora.getMinutes())}`,
+    time: `${pad(appointment.fecha_hora.getUTCHours())}:${pad(
+      appointment.fecha_hora.getUTCMinutes()
+    )}`,
   };
 };
 
-// ─── List appointments by day ─────────────────────────────────────────
 const listAppointmentsByDay = async ({ companyId, date, referenceDate }) => {
-  const normalizedDate = normalizeDate(date, referenceDate) || normalizeDate(referenceDate);
+  const normalizedDate =
+    normalizeDate(date, referenceDate) || normalizeDate(referenceDate);
   if (!normalizedDate) return [];
 
-  const dayStart = new Date(`${normalizedDate}T00:00:00`);
-  const dayEnd = new Date(`${normalizedDate}T23:59:59`);
+  const dayStart = new Date(`${normalizedDate}T00:00:00Z`);
+  const dayEnd = new Date(`${normalizedDate}T23:59:59Z`);
 
   const turnos = await prisma.tURNO.findMany({
     where: {
@@ -478,21 +702,139 @@ const listAppointmentsByDay = async ({ companyId, date, referenceDate }) => {
     orderBy: { fecha_hora: "asc" },
   });
 
-  return turnos.map((t) => ({
-    appointmentId: t.id_turno,
-    date: t.fecha_hora.toISOString().slice(0, 10),
-    time: formatTime(`${pad(t.fecha_hora.getHours())}:${pad(t.fecha_hora.getMinutes())}`),
-    status: t.estado,
-    serviceName: t.SERVICIO?.nombre || "Turno",
-    professionalName: `${t.PRESTADOR.USUARIO.nombre} ${t.PRESTADOR.USUARIO.apellido}`,
-    clientName: t.CLIENTE?.nombre_wa || "Sin nombre",
+  return turnos.map((turno) => ({
+    appointmentId: turno.id_turno,
+    date: turno.fecha_hora.toISOString().slice(0, 10),
+    time: formatTime(
+      `${pad(turno.fecha_hora.getUTCHours())}:${pad(
+        turno.fecha_hora.getUTCMinutes()
+      )}`
+    ),
+    status: turno.estado,
+    serviceName: turno.SERVICIO?.nombre || "Turno",
+    professionalName: `${turno.PRESTADOR.USUARIO.nombre} ${turno.PRESTADOR.USUARIO.apellido}`,
+    clientName: turno.CLIENTE?.nombre_wa || "Sin nombre",
   }));
+};
+
+const cancelAppointmentByCompanyFromAssistant = async ({
+  companyId,
+  date,
+  time,
+  referenceDate,
+  professionalName,
+  clientName,
+}) => {
+  const normalizedDate = date ? normalizeDate(date, referenceDate) : null;
+  const normalizedTime = time ? formatTime(time) : null;
+
+  const where = {
+    estado: { in: ["pendiente", "confirmado"] },
+    PRESTADOR: { id_empresa: companyId },
+  };
+
+  if (normalizedDate) {
+    where.fecha_hora = {
+      gte: new Date(`${normalizedDate}T00:00:00Z`),
+      lte: new Date(`${normalizedDate}T23:59:59Z`),
+    };
+  } else {
+    where.fecha_hora = { gte: getNowInTimezone() };
+  }
+
+  const appointments = await prisma.tURNO.findMany({
+    where,
+    include: {
+      SERVICIO: true,
+      PRESTADOR: { include: { USUARIO: true } },
+      CLIENTE: true,
+    },
+    orderBy: { fecha_hora: "asc" },
+  });
+
+  let filtered = appointments;
+
+  if (normalizedTime) {
+    filtered = filtered.filter((appointment) => {
+      const slotTime = `${pad(appointment.fecha_hora.getUTCHours())}:${pad(
+        appointment.fecha_hora.getUTCMinutes()
+      )}`;
+      return slotTime === normalizedTime;
+    });
+  }
+
+  if (professionalName) {
+    const needle = normalizeSearchText(professionalName);
+    filtered = filtered.filter((appointment) => {
+      const fullName = normalizeSearchText(
+        `${appointment.PRESTADOR?.USUARIO?.nombre || ""} ${
+          appointment.PRESTADOR?.USUARIO?.apellido || ""
+        }`
+      );
+      return fullName.includes(needle);
+    });
+  }
+
+  if (clientName) {
+    const needle = normalizeSearchText(clientName);
+    filtered = filtered.filter((appointment) =>
+      normalizeSearchText(appointment.CLIENTE?.nombre_wa || "").includes(needle)
+    );
+  }
+
+  if (!filtered.length) {
+    throw new Error(
+      "No encontre ningun turno activo con esos datos para cancelar."
+    );
+  }
+
+  if (filtered.length > 1 && (!normalizedDate || !normalizedTime)) {
+    return {
+      status: "multiple_found",
+      appointments: filtered.slice(0, 8).map((appointment) => ({
+        id: appointment.id_turno,
+        date: appointment.fecha_hora.toISOString().slice(0, 10),
+        time: `${pad(appointment.fecha_hora.getUTCHours())}:${pad(
+          appointment.fecha_hora.getUTCMinutes()
+        )}`,
+        professional: `${appointment.PRESTADOR?.USUARIO?.nombre || ""} ${
+          appointment.PRESTADOR?.USUARIO?.apellido || ""
+        }`.trim(),
+        client: appointment.CLIENTE?.nombre_wa || "Sin nombre",
+      })),
+    };
+  }
+
+  const appointment = filtered[0];
+  await prisma.tURNO.update({
+    where: { id_turno: appointment.id_turno },
+    data: { estado: "cancelado" },
+  });
+
+  return {
+    status: "cancelled",
+    appointmentId: appointment.id_turno,
+    date: appointment.fecha_hora.toISOString().slice(0, 10),
+    time: `${pad(appointment.fecha_hora.getUTCHours())}:${pad(
+      appointment.fecha_hora.getUTCMinutes()
+    )}`,
+    professional: `${appointment.PRESTADOR?.USUARIO?.nombre || ""} ${
+      appointment.PRESTADOR?.USUARIO?.apellido || ""
+    }`.trim(),
+    client: appointment.CLIENTE?.nombre_wa || "Sin nombre",
+    clientPhone: normalizePhone(appointment.CLIENTE?.whatsapp_id || ""),
+    service: appointment.SERVICIO?.nombre || "Turno",
+    askNotifyMati: true,
+  };
 };
 
 module.exports = {
   cancelAppointmentFromAssistant,
+  cancelAppointmentByCompanyFromAssistant,
   createAppointmentFromAssistant,
+  getCompanyContextByCompanyId,
   getCompanyContextByInstanceName,
+  isSlotStillBookable,
   listAvailableSlots,
   listAppointmentsByDay,
   normalizeDate,

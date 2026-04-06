@@ -1,172 +1,195 @@
-const express = require('express');
+﻿const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const authMiddleware = require('../middlewares/auth.middleware');
+const { listAvailableSlots } = require('../services/ai/companyContextService');
 
 router.use(authMiddleware);
 
-const SLOT_INTERVAL_MINUTES = 60;
+const EMPTY_CONFIG = { config: [] };
 
-const getCompanyAvailability = async (companyId) => {
-    const [rows] = await pool.execute(
-        'SELECT horarios_disponibilidad FROM EMPRESA WHERE id_empresa = ?',
+const parseAvailabilityConfig = (value) => {
+    if (!value) return EMPTY_CONFIG;
+
+    if (typeof value === 'string') {
+        try {
+            const parsed = JSON.parse(value);
+            return parseAvailabilityConfig(parsed);
+        } catch (_) {
+            return EMPTY_CONFIG;
+        }
+    }
+
+    if (typeof value !== 'object' || Array.isArray(value)) {
+        return EMPTY_CONFIG;
+    }
+
+    return {
+        config: Array.isArray(value.config) ? value.config : [],
+    };
+};
+
+const hasOwnAvailabilityConfig = (value) => parseAvailabilityConfig(value).config.length > 0;
+
+const getCompanyAvailabilityRow = async (companyId, executor = pool) => {
+    const [rows] = await executor.execute(
+        'SELECT horarios_disponibilidad FROM EMPRESA WHERE id_empresa = ? LIMIT 1',
         [companyId]
     );
 
-    if (rows.length === 0) return null;
-    return rows[0].horarios_disponibilidad;
+    return rows[0] || null;
 };
 
-const getPrestadorAvailability = async (companyId, prestadorId) => {
-    const [rows] = await pool.execute(
-        'SELECT horarios_disponibilidad FROM PRESTADOR WHERE id_prestador = ? AND id_empresa = ?',
-        [prestadorId, companyId]
+const getProfessionalAvailabilityRow = async (companyId, prestadorId, executor = pool) => {
+    const [rows] = await executor.execute(
+        'SELECT id_prestador, horarios_disponibilidad FROM PRESTADOR WHERE id_empresa = ? AND id_prestador = ? LIMIT 1',
+        [companyId, prestadorId]
     );
 
-    if (rows.length === 0) {
-        return { exists: false, config: null };
-    }
-
-    return {
-        exists: true,
-        config: rows[0].horarios_disponibilidad,
-    };
+    return rows[0] || null;
 };
 
-const getPrestadorScope = async (req, prestadorIdFromQuery = null) => {
-    const companyId = req.user.id_empresa;
-    const companyConfig = await getCompanyAvailability(companyId);
-
-    if (companyConfig === null) {
-        return { error: { status: 404, message: 'Empresa no encontrada' } };
-    }
-
+const getRequestedPrestadorId = (req) => {
     if (req.user.rol === 'prestador') {
-        const ownPrestadorId = Number(req.user.id_prestador);
-        if (!ownPrestadorId) {
-            return { error: { status: 403, message: 'No tenés un prestador asociado' } };
-        }
-
-        if (prestadorIdFromQuery && Number(prestadorIdFromQuery) !== ownPrestadorId) {
-            return { error: { status: 403, message: 'No podés consultar el horario de otro prestador' } };
-        }
-
-        const ownResult = await getPrestadorAvailability(companyId, ownPrestadorId);
-        if (!ownResult.exists) {
-            return { error: { status: 404, message: 'Prestador no encontrado' } };
-        }
-
-        return {
-            companyConfig,
-            prestadorId: ownPrestadorId,
-            effective: resolveEffectiveAvailability({ ownConfig: ownResult.config, companyConfig }),
-        };
+        return Number(req.user.id_prestador || 0) || null;
     }
 
-    if (!prestadorIdFromQuery) {
-        return {
-            companyConfig,
-            prestadorId: null,
-            effective: {
-                scope: 'empresa',
-                source: 'own',
-                config: toAvailabilityPayload(companyConfig),
-            },
-        };
-    }
-
-    const prestadorId = Number(prestadorIdFromQuery);
-    if (!prestadorId) {
-        return { error: { status: 400, message: 'prestador_id inválido' } };
-    }
-
-    const ownResult = await getPrestadorAvailability(companyId, prestadorId);
-    if (!ownResult.exists) {
-        return { error: { status: 404, message: 'Prestador no encontrado' } };
-    }
-
-    return {
-        companyConfig,
-        prestadorId,
-        effective: resolveEffectiveAvailability({ ownConfig: ownResult.config, companyConfig }),
-    };
+    const rawValue = req.query.prestador_id ?? req.body?.prestador_id ?? null;
+    const parsed = Number(rawValue);
+    return parsed || null;
 };
 
 router.get('/config', async (req, res) => {
     try {
-        const [rows] = await pool.execute('SELECT horarios_disponibilidad FROM EMPRESA WHERE id_empresa = ?', [req.user.id_empresa]);
-        if (rows.length === 0) return res.status(404).json({ error: 'Empresa no encontrada' });
-        res.json(rows[0].horarios_disponibilidad || { config: [] });
+        const companyId = req.user.id_empresa;
+        const requestedPrestadorId = getRequestedPrestadorId(req);
+        const companyRow = await getCompanyAvailabilityRow(companyId);
+
+        if (!companyRow) {
+            return res.status(404).json({ error: 'Empresa no encontrada' });
+        }
+
+        const companyConfig = parseAvailabilityConfig(companyRow.horarios_disponibilidad);
+
+        if (!requestedPrestadorId) {
+            return res.json({
+                scope: 'empresa',
+                source: 'empresa',
+                prestador_id: null,
+                config: companyConfig.config,
+            });
+        }
+
+        const professionalRow = await getProfessionalAvailabilityRow(companyId, requestedPrestadorId);
+        if (!professionalRow) {
+            return res.status(404).json({ error: 'Prestador no encontrado' });
+        }
+
+        const professionalConfig = parseAvailabilityConfig(professionalRow.horarios_disponibilidad);
+        const source = hasOwnAvailabilityConfig(professionalRow.horarios_disponibilidad)
+            ? 'propio'
+            : 'fallback_empresa';
+
+        return res.json({
+            scope: 'prestador',
+            source,
+            prestador_id: requestedPrestadorId,
+            config: (source === 'propio' ? professionalConfig : companyConfig).config,
+        });
     } catch (err) {
-        res.status(500).json({ error: 'Error al obtener disponibilidad' });
+        console.error(err);
+        return res.status(500).json({ error: 'Error al obtener disponibilidad' });
     }
 });
 
 router.put('/config', async (req, res) => {
-    const { items } = req.body;
+    const connection = await pool.getConnection();
+
     try {
-        const config = { config: items };
-        await pool.execute('UPDATE EMPRESA SET horarios_disponibilidad = ? WHERE id_empresa = ?', [JSON.stringify(config), req.user.id_empresa]);
-        res.json(config);
+        const companyId = req.user.id_empresa;
+        const requestedPrestadorId = getRequestedPrestadorId(req);
+        const items = Array.isArray(req.body?.items) ? req.body.items : [];
+        const payload = JSON.stringify({ config: items });
+
+        await connection.beginTransaction();
+
+        if (requestedPrestadorId) {
+            const professionalRow = await getProfessionalAvailabilityRow(companyId, requestedPrestadorId, connection);
+            if (!professionalRow) {
+                await connection.rollback();
+                return res.status(404).json({ error: 'Prestador no encontrado' });
+            }
+
+            await connection.execute(
+                'UPDATE PRESTADOR SET horarios_disponibilidad = ? WHERE id_prestador = ? AND id_empresa = ?',
+                [payload, requestedPrestadorId, companyId]
+            );
+
+            const companyRow = await getCompanyAvailabilityRow(companyId, connection);
+            await connection.commit();
+
+            return res.json({
+                scope: 'prestador',
+                source: items.length ? 'propio' : 'fallback_empresa',
+                prestador_id: requestedPrestadorId,
+                config: items.length ? items : parseAvailabilityConfig(companyRow?.horarios_disponibilidad).config,
+            });
+        }
+
+        await connection.execute(
+            'UPDATE EMPRESA SET horarios_disponibilidad = ? WHERE id_empresa = ?',
+            [payload, companyId]
+        );
+
+        await connection.commit();
+
+        return res.json({
+            scope: 'empresa',
+            source: 'empresa',
+            prestador_id: null,
+            config: items,
+        });
     } catch (err) {
-        res.status(500).json({ error: 'Error al actualizar disponibilidad' });
+        try {
+            await connection.rollback();
+        } catch (_) {
+            // noop
+        }
+        console.error(err);
+        return res.status(500).json({ error: 'Error al actualizar disponibilidad' });
+    } finally {
+        connection.release();
     }
 });
 
 router.get('/', async (req, res) => {
-    const { prestador_id, fecha } = req.query;
+    const professionalId = Number(req.query.prestador_id);
+    const serviceId = Number(req.query.servicio_id);
+    const date = String(req.query.fecha || '').trim();
 
-    if (!prestador_id || !fecha) {
+    if (!professionalId || !date) {
         return res.status(400).json({ error: 'Faltan parámetros' });
     }
 
     try {
-        const empId = req.user.id_empresa;
-        const [empresaRows] = await pool.execute('SELECT horarios_disponibilidad FROM EMPRESA WHERE id_empresa = ?', [empId]);
-        const empresa = empresaRows[0];
-
-        // Fetch turnos for the day
-        const dayStart = `${fecha} 00:00:00`;
-        const dayEnd = `${fecha} 23:59:59`;
-        const [turnos] = await pool.execute(
-            'SELECT fecha_hora FROM TURNO WHERE id_prestador = ? AND fecha_hora BETWEEN ? AND ? AND estado != "cancelado"',
-            [prestador_id, dayStart, dayEnd]
-        );
-
-        const jsDay = new Date(fecha).getDay(); 
-        const dayMap = [7, 1, 2, 3, 4, 5, 6]; 
-        const targetDay = dayMap[jsDay];
-
-        const config = empresa?.horarios_disponibilidad?.config || [];
-        const dayConfig = config.filter(c => c.dia_semana === targetDay);
-
-        let slots = [];
-        dayConfig.forEach(range => {
-            let current = new Date(`${fecha}T${range.hora_desde}`);
-            const endParts = range.hora_hasta.split(':');
-            const end = new Date(`${fecha}T${range.hora_hasta}`);
-
-            while (current < end) {
-                const hh = String(current.getHours()).padStart(2, '0');
-                const mm = String(current.getMinutes()).padStart(2, '0');
-                const timeStr = `${hh}:${mm}`;
-                
-                const isTaken = turnos.some(t => {
-                    const rowDate = new Date(t.fecha_hora);
-                    const rowHH = String(rowDate.getHours()).padStart(2, '0');
-                    const rowMM = String(rowDate.getMinutes()).padStart(2, '0');
-                    return `${rowHH}:${rowMM}` === timeStr;
-                });
-
-                if (!isTaken) slots.push(timeStr);
-                current.setMinutes(current.getMinutes() + SLOT_INTERVAL_MINUTES);
-            }
+        const slots = await listAvailableSlots({
+            companyId: req.user.id_empresa,
+            professionalId,
+            serviceId: serviceId || null,
+            startDate: date,
+            endDate: date,
+            referenceDate: date,
+            limit: 120,
         });
 
-        res.json({ slots });
+        return res.json({
+            slots: slots
+                .filter((slot) => Number(slot.professionalId) === professionalId && slot.date === date)
+                .map((slot) => slot.time),
+        });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Error calculando disponibilidad' });
+        return res.status(500).json({ error: 'Error calculando disponibilidad' });
     }
 });
 
