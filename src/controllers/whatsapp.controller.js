@@ -14,9 +14,14 @@ const {
 } = require("../services/evolution.service");
 
 // Helper to save or update CONFIG_WHATSAPP
-const persistWhatsappInstance = async ({ companyId, instanceName, phoneNumber, status }) => {
+const persistWhatsappInstance = async ({
+  companyId,
+  instanceName,
+  phoneNumber,
+  status,
+}) => {
   let config = await prisma.cONFIG_WHATSAPP.findUnique({
-    where: { id_empresa: companyId }
+    where: { id_empresa: companyId },
   });
 
   const isConnected = status === "open";
@@ -28,7 +33,7 @@ const persistWhatsappInstance = async ({ companyId, instanceName, phoneNumber, s
         instance_name: instanceName,
         whatsapp_number: phoneNumber,
         conectado: isConnected,
-      }
+      },
     });
     invalidateCompanyInternalPhonesCache();
     return updated;
@@ -39,7 +44,7 @@ const persistWhatsappInstance = async ({ companyId, instanceName, phoneNumber, s
         instance_name: instanceName,
         whatsapp_number: phoneNumber,
         conectado: isConnected,
-      }
+      },
     });
     invalidateCompanyInternalPhonesCache();
     return created;
@@ -61,13 +66,15 @@ const createInstanceQr = async (req, res, next) => {
       // If instance already exists (400), try to reconnect it instead of failing
       const axiosStatus = createError.response?.status || createError.status;
       if (axiosStatus === 400 || axiosStatus === 409) {
-        const instanceName = normalizeInstanceName(buildInstanceName({ companyId }));
+        const instanceName = normalizeInstanceName(
+          buildInstanceName({ companyId }),
+        );
 
         // Try to connect the existing instance to get a QR
         try {
           const connectRes = await require("axios").get(
             `${process.env.EVOLUTION_API_URL || "http://localhost:8080"}/instance/connect/${instanceName}`,
-            { headers: { apikey: process.env.EVOLUTION_API_KEY } }
+            { headers: { apikey: process.env.EVOLUTION_API_KEY } },
           );
           const connectionState = await getSafeConnectionState(instanceName);
           const webhook = await registerWebhook(instanceName);
@@ -101,7 +108,10 @@ const createInstanceQr = async (req, res, next) => {
       }
     }
 
-    const status = result.connectionState?.instance?.state || result.connectionState?.state || "close";
+    const status =
+      result.connectionState?.instance?.state ||
+      result.connectionState?.state ||
+      "close";
 
     await persistWhatsappInstance({
       companyId,
@@ -123,7 +133,7 @@ const getCurrentInstance = async (req, res, next) => {
   try {
     const companyId = req.user.id_empresa;
     let storedInstance = await prisma.cONFIG_WHATSAPP.findUnique({
-      where: { id_empresa: companyId }
+      where: { id_empresa: companyId },
     });
 
     if (!storedInstance || !storedInstance.instance_name) {
@@ -132,7 +142,8 @@ const getCurrentInstance = async (req, res, next) => {
 
     const instanceName = normalizeInstanceName(storedInstance.instance_name);
     const connectionState = await getSafeConnectionState(instanceName);
-    const resolvedStatus = connectionState.instance?.state || connectionState.state || "unknown";
+    const resolvedStatus =
+      connectionState.instance?.state || connectionState.state || "unknown";
 
     // Forzamos la actualización del Webhook siempre que se consulte el estado.
     // Esto asegura que si el ngrok cambió de URL libre, Evolution API se entere al instante.
@@ -154,11 +165,16 @@ const getCurrentInstance = async (req, res, next) => {
         status: resolvedStatus,
         conectado: resolvedStatus === "open",
       },
-      qr: resolvedStatus === "open" ? normalizeQrPayload(null) : getLatestQr(instanceName),
+      qr:
+        resolvedStatus === "open"
+          ? normalizeQrPayload(null)
+          : getLatestQr(instanceName),
       connectionState,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message || "Error al obtener la instancia" });
+    res
+      .status(500)
+      .json({ error: error.message || "Error al obtener la instancia" });
   }
 };
 
@@ -166,7 +182,7 @@ const disconnectCurrentInstance = async (req, res, next) => {
   try {
     const companyId = req.user.id_empresa;
     const storedInstance = await prisma.cONFIG_WHATSAPP.findUnique({
-      where: { id_empresa: companyId }
+      where: { id_empresa: companyId },
     });
 
     if (!storedInstance || !storedInstance.instance_name) {
@@ -197,7 +213,9 @@ const disconnectCurrentInstance = async (req, res, next) => {
 
 const handleWebhook = async (req, res, next) => {
   try {
-    const instanceName = normalizeInstanceName(req.params.instanceName || req.body?.instance || req.body?.instanceName);
+    const instanceName = normalizeInstanceName(
+      req.params.instanceName || req.body?.instance || req.body?.instanceName,
+    );
     const payload = req.body;
 
     console.log("WEBHOOK RECIBIDO:", {
@@ -245,11 +263,15 @@ const handleWebhook = async (req, res, next) => {
       payload?.event === "messages.upsert" ||
       payload?.event === "messages.update"
     ) {
-      const { processIncomingMessage } = require("../services/evolution.service");
+      const {
+        processIncomingMessage,
+      } = require("../services/evolution.service");
 
-      processIncomingMessage({ instanceName, webhookData: payload }).catch((err) => {
-        console.error("Error procesando webhook:", err.message);
-      });
+      processIncomingMessage({ instanceName, webhookData: payload }).catch(
+        (err) => {
+          console.error("Error procesando webhook:", err.message);
+        },
+      );
     }
   } catch (error) {
     console.error("❌ Error en handleWebhook:", error.message);
@@ -273,7 +295,9 @@ const getMessages = async (req, res, next) => {
 
     res.json({ messages });
   } catch (error) {
-    res.status(500).json({ error: error.message || "Error al obtener mensajes" });
+    res
+      .status(500)
+      .json({ error: error.message || "Error al obtener mensajes" });
   }
 };
 
@@ -290,7 +314,9 @@ const sendMessage = async (req, res, next) => {
     });
 
     if (!storedInstance || !storedInstance.instance_name) {
-      return res.status(400).json({ error: "No hay instancia de WhatsApp configurada" });
+      return res
+        .status(400)
+        .json({ error: "No hay instancia de WhatsApp configurada" });
     }
 
     const instanceName = normalizeInstanceName(storedInstance.instance_name);

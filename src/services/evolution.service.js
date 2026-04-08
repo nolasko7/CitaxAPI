@@ -736,9 +736,15 @@ const collectStringsFromKeyHints = (value, keyRegex, bucket = []) => {
 };
 
 const resolveYesNoFromValues = (values = []) => {
-  const normalizedValues = values.map((entry) => normalizeSurveyText(entry)).filter(Boolean);
-  const hasYes = normalizedValues.some((entry) => /\b(si|yes|ok|dale)\b/.test(entry));
-  const hasNo = normalizedValues.some((entry) => /\b(no|nop|nope)\b/.test(entry));
+  const normalizedValues = values
+    .map((entry) => normalizeSurveyText(entry))
+    .filter(Boolean);
+  const hasYes = normalizedValues.some((entry) =>
+    /\b(si|yes|ok|dale)\b/.test(entry),
+  );
+  const hasNo = normalizedValues.some((entry) =>
+    /\b(no|nop|nope)\b/.test(entry),
+  );
 
   if (hasYes && !hasNo) return "yes";
   if (hasNo && !hasYes) return "no";
@@ -988,11 +994,14 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
         }
         pendingIncomingMessageBatches.delete(batchKey);
 
-        console.log("🛑 Contacto silenciado por mensaje manual (fromMe=true):", {
-          instanceName,
-          from: normalized.phoneNumber,
-          muteUntil: new Date(muteUntil).toISOString(),
-        });
+        console.log(
+          "🛑 Contacto silenciado por mensaje manual (fromMe=true):",
+          {
+            instanceName,
+            from: normalized.phoneNumber,
+            muteUntil: new Date(muteUntil).toISOString(),
+          },
+        );
       }
       console.log("â­ï¸ Ignorado: fromMe=true");
       continue;
@@ -1053,11 +1062,12 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
       if (!decision && hasProcessableText(normalized.text)) {
         try {
           const { __testables } = require("./ai/geminiService");
-          const isTurnoIntent = await __testables.isAppointmentRelatedInteraction({
-            incomingText: normalized.text,
-            history: [],
-            lastAssistantReply: "",
-          });
+          const isTurnoIntent =
+            await __testables.isAppointmentRelatedInteraction({
+              incomingText: normalized.text,
+              history: [],
+              lastAssistantReply: "",
+            });
           decision = isTurnoIntent ? "yes" : "no";
           console.log("🧭 Encuesta pendiente: decision inferida por mensaje:", {
             instanceName,
@@ -1066,11 +1076,14 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
             textPreview: String(normalized.text || "").slice(0, 100),
           });
         } catch (error) {
-          console.warn("⚠️ No se pudo inferir decision en encuesta pendiente:", {
-            instanceName,
-            from: normalized.phoneNumber,
-            message: error.message,
-          });
+          console.warn(
+            "⚠️ No se pudo inferir decision en encuesta pendiente:",
+            {
+              instanceName,
+              from: normalized.phoneNumber,
+              message: error.message,
+            },
+          );
           decision = "no";
         }
       }
