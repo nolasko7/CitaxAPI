@@ -379,7 +379,15 @@ const findOrCreateClient = async ({ companyId, clientName, clientPhone }) => {
     },
   });
 
-  if (existing) return existing;
+  if (existing) {
+    if (normalizedName && normalizedName !== String(existing.nombre_wa || "").trim()) {
+      return prisma.cLIENTE.update({
+        where: { id_cliente: existing.id_cliente },
+        data: { nombre_wa: normalizedName },
+      });
+    }
+    return existing;
+  }
 
   return await prisma.cLIENTE.create({
     data: {

@@ -833,6 +833,52 @@ const sanitizeNonReplyOutput = (value) => {
 const FINAL_REPLY_RECOVERY_PROMPT =
   "Con toda la informacion y resultados de herramientas anteriores, responde ahora al cliente con un mensaje final breve en español rioplatense. No llames herramientas, no expliques pasos internos y no dejes la respuesta vacia.";
 
+const hasSuccessfulAppointmentBookingInHistory = (history = []) => {
+  const messages = Array.isArray(history) ? history : [];
+
+  const hasCreateAppointmentToolCall = messages.some(
+    (message) =>
+      isAIMessage(message) &&
+      Array.isArray(message.tool_calls) &&
+      message.tool_calls.some(
+        (toolCall) => String(toolCall?.name || "").trim() === "create_appointment",
+      ),
+  );
+
+  if (!hasCreateAppointmentToolCall) {
+    return false;
+  }
+
+  const toolMessages = messages.filter(
+    (message) => message?._getType?.() === "tool",
+  );
+
+  if (!toolMessages.length) {
+    return true;
+  }
+
+  return toolMessages.some((message) => {
+    const toolOutputRaw = stringifyMessageContent(message?.content);
+    const toolOutput = normalizeAssistantText(toolOutputRaw);
+
+    const hasSuccessMarkers =
+      toolOutput.includes("appointmentid") ||
+      toolOutput.includes("appointment") ||
+      toolOutput.includes("humandate") ||
+      toolOutput.includes("date") ||
+      toolOutput.includes("time");
+
+    const hasErrorMarkers =
+      toolOutput.includes("error") ||
+      toolOutput.includes("fail") ||
+      toolOutput.includes("no encontre") ||
+      toolOutput.includes("no hay") ||
+      toolOutput.includes("invalid");
+
+    return hasSuccessMarkers && !hasErrorMarkers;
+  });
+};
+
 const shouldSilenceClosingReply = ({
   history = [],
   lastAssistantReply = "",
@@ -845,7 +891,12 @@ const shouldSilenceClosingReply = ({
   const reply =
     String(lastAssistantReply || "").trim() ||
     extractAssistantReplyFromMessages(history).reply;
-  return looksLikeAppointmentConfirmation(reply);
+
+  if (!looksLikeAppointmentConfirmation(reply)) {
+    return false;
+  }
+
+  return hasSuccessfulAppointmentBookingInHistory(history);
 };
 
 const isAvailabilityLookupIntent = (value) => {
@@ -1041,6 +1092,7 @@ const classifyAppointmentIntentWithGemini = async ({
   incomingText = "",
   history = [],
   lastAssistantReply = "",
+  surveyQuestion = "",
 }) => {
   const model = createGeminiModel();
   const { recent, lastReply } = buildIntentClassifierContext({
@@ -1054,10 +1106,11 @@ const classifyAppointmentIntentWithGemini = async ({
 Responde SOLO una palabra:
 - APPOINTMENT: si el mensaje actual esta relacionado con reservar/cancelar/reprogramar/consultar turnos, horarios o disponibilidad, o es una continuacion corta (ej: si, dale, ok) de una charla de turnos.
 - OTHER: si es charla social, tema personal, amigos/familia, o cualquier tema no relacionado con turnos.
+Regla critica: si hubo una encuesta/pregunta cerrada del bot sobre sacar turno (por ejemplo "Queres sacar un turno? Si/No") y el cliente responde de forma afirmativa coloquial (por ejemplo "si", "dale", "me pinta", "de una", "obvio", "mandale"), clasifica APPOINTMENT.
 No agregues explicaciones.`,
     ),
     new HumanMessage(
-      `MENSAJE_ACTUAL:\n${String(incomingText || "").trim()}\n\nULTIMA_RESPUESTA_BOT:\n${lastReply || "(sin respuesta previa)"}\n\nCONTEXTO_RECIENTE:\n${recent || "(sin historial)"}`,
+      `MENSAJE_ACTUAL:\n${String(incomingText || "").trim()}\n\nULTIMA_RESPUESTA_BOT:\n${lastReply || "(sin respuesta previa)"}\n\nPREGUNTA_ENCUESTA (si existe):\n${String(surveyQuestion || "").trim() || "(sin encuesta)"}\n\nCONTEXTO_RECIENTE:\n${recent || "(sin historial)"}`,
     ),
   ]);
 
@@ -1074,12 +1127,14 @@ const isAppointmentRelatedInteraction = async ({
   incomingText = "",
   history = [],
   lastAssistantReply = "",
+  surveyQuestion = "",
 }) => {
   try {
     const classification = await classifyAppointmentIntentWithGemini({
       incomingText,
       history,
       lastAssistantReply,
+      surveyQuestion,
     });
 
     if (classification.label !== "UNKNOWN") {
@@ -1144,7 +1199,11 @@ const resolvePreferredContactName = (rawName) => {
   return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
 };
 
-const createTools = ({ companyContext, customerPhone }) => {
+const createTools = ({
+  companyContext,
+  customerPhone,
+  trustedContactName = "",
+}) => {
   return [
     tool(
       async () => {
@@ -1227,10 +1286,13 @@ const createTools = ({ companyContext, customerPhone }) => {
         date,
         time,
       }) => {
+        const resolvedClientName =
+          String(trustedContactName || "").trim() || String(clientName || "").trim();
+
         const appointment = await createAppointmentFromAssistant({
           companyId: companyContext.companyId,
           professionalId,
-          clientName,
+          clientName: resolvedClientName,
           clientPhone: customerPhone,
           serviceId: serviceId || null,
           date,
@@ -1751,6 +1813,7 @@ const runWhatsappAssistant = async ({
   const tools = createTools({
     companyContext: effectiveCompanyContext,
     customerPhone,
+    trustedContactName: preferredName,
   });
   const systemPrompt = buildAssistantPrompt({
     ...effectiveCompanyContext,
@@ -1760,7 +1823,7 @@ const runWhatsappAssistant = async ({
   });
   const temporalRef = buildTemporalReferenceText(realtimeContext);
   const contactRef = preferredName
-    ? `Este cliente figura como '${preferredName}' en WhatsApp.`
+    ? `Este cliente figura como '${preferredName}' en WhatsApp. Si decides nombrarlo, usa exclusivamente ese nombre y nunca inventes otro.`
     : "No hay nombre de contacto disponible, usa trato neutro.";
   const phoneRef = `Telefono del cliente (no lo pidas): ${customerPhone}.`;
   const availabilityGuardRef = isAvailabilityLookupIntent(messageText)
@@ -1813,16 +1876,16 @@ const runWhatsappAssistant = async ({
     };
   }
 
-  if (
-    !(await isAppointmentRelatedInteraction({
-      incomingText: messageText,
-      history,
-      lastAssistantReply: sessionState.lastAssistantReply,
-    }))
-  ) {
+  const isRelatedToAppointments = await isAppointmentRelatedInteraction({
+    incomingText: messageText,
+    history,
+    lastAssistantReply: sessionState.lastAssistantReply || "",
+  });
+
+  if (!isRelatedToAppointments) {
     return {
       enabled: false,
-      reason: "Mensaje fuera de alcance (no relacionado a turnos).",
+      reason: "Mensaje fuera de alcance de turnos.",
       companyContext: effectiveCompanyContext,
     };
   }

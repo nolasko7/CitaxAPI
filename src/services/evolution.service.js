@@ -433,6 +433,12 @@ const sendTextMessage = async (phoneNumber, text, instanceName) => {
     `/message/sendText/${normalizedInstanceName}`,
     { number, text },
   );
+  rememberBotOutboundMessage({
+    instanceName: normalizedInstanceName,
+    phoneNumber: number,
+    text,
+    responseData: response.data,
+  });
   return response.data;
 };
 
@@ -443,13 +449,13 @@ const sendPollMessage = async (phoneNumber, instanceName) => {
   const payloadCandidates = [
     {
       number,
-      name: "Queres sacar un turno?",
+      name: "Hola, Queres sacar un turno?",
       selectableCount: 1,
       values: ["Si", "No"],
     },
     {
       number,
-      title: "Queres sacar un turno?",
+      title: "Hola, Queres sacar un turno?",
       options: ["Si", "No"],
       selectableCount: 1,
     },
@@ -648,6 +654,13 @@ const recentMessagesStore = new Map();
 const MAX_RECENT = 100;
 const pendingIncomingMessageBatches = new Map();
 const whatsappConversationGate = new Map();
+const recentBotOutboundByConversation = new Map();
+const recentBotOutboundMessageIds = new Map();
+const BOT_OUTBOUND_TTL_MS = 2 * 60 * 1000;
+const WHATSAPP_PENDING_SURVEY_TTL_MS =
+  Number(process.env.WHATSAPP_PENDING_SURVEY_TTL_MINUTES || 20) * 60 * 1000;
+const WHATSAPP_OPTED_IN_TTL_MS =
+  Number(process.env.WHATSAPP_OPTED_IN_TTL_HOURS || 12) * 60 * 60 * 1000;
 const WHATSAPP_NO_REPLY_MUTE_MS =
   Number(process.env.WHATSAPP_NO_REPLY_MUTE_HOURS || 12) * 60 * 60 * 1000;
 const resolveMessageBatchWindowMs = () => {
@@ -664,6 +677,9 @@ const WHATSAPP_MESSAGE_BATCH_WINDOW_MS = resolveMessageBatchWindowMs();
 const getConversationGateKey = ({ instanceName, phoneNumber }) =>
   `${normalizeInstanceName(instanceName)}:${normalizeWhatsappPhone(phoneNumber)}`;
 
+const getConversationKey = ({ instanceName, phoneNumber }) =>
+  `${normalizeInstanceName(instanceName)}:${normalizeWhatsappPhone(phoneNumber)}`;
+
 const normalizeSurveyText = (value) =>
   String(value || "")
     .normalize("NFD")
@@ -672,6 +688,89 @@ const normalizeSurveyText = (value) =>
     .replace(/[^\w\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+const rememberBotOutboundMessage = ({
+  instanceName,
+  phoneNumber,
+  text,
+  responseData,
+}) => {
+  const conversationKey = getConversationKey({ instanceName, phoneNumber });
+  if (!conversationKey) return;
+
+  const now = Date.now();
+  const normalizedText = normalizeComparableText(text);
+  const existing = recentBotOutboundByConversation.get(conversationKey) || [];
+  const retained = existing.filter(
+    (entry) => now - entry.sentAt <= BOT_OUTBOUND_TTL_MS,
+  );
+  retained.push({ normalizedText, sentAt: now });
+  recentBotOutboundByConversation.set(conversationKey, retained);
+
+  const strings = collectStringValues(responseData || {}).filter(Boolean);
+  for (const value of strings) {
+    const candidate = String(value).trim();
+    if (candidate.length >= 8 && /[a-z0-9]/i.test(candidate)) {
+      recentBotOutboundMessageIds.set(candidate, now);
+    }
+  }
+};
+
+const isWebhookFromKnownBotOutbound = ({
+  instanceName,
+  phoneNumber,
+  text,
+  messageId,
+}) => {
+  const now = Date.now();
+
+  for (const [id, seenAt] of recentBotOutboundMessageIds.entries()) {
+    if (now - seenAt > BOT_OUTBOUND_TTL_MS) {
+      recentBotOutboundMessageIds.delete(id);
+    }
+  }
+
+  if (messageId && recentBotOutboundMessageIds.has(messageId)) {
+    recentBotOutboundMessageIds.delete(messageId);
+    return true;
+  }
+
+  const conversationKey = getConversationKey({ instanceName, phoneNumber });
+  if (!conversationKey) return false;
+
+  const entries = recentBotOutboundByConversation.get(conversationKey) || [];
+  const retained = entries.filter(
+    (entry) => now - entry.sentAt <= BOT_OUTBOUND_TTL_MS,
+  );
+  if (!retained.length) {
+    recentBotOutboundByConversation.delete(conversationKey);
+    return false;
+  }
+
+  const normalizedText = normalizeComparableText(text);
+  if (!normalizedText) {
+    recentBotOutboundByConversation.set(conversationKey, retained);
+    return false;
+  }
+
+  const matchedIndex = retained.findIndex(
+    (entry) => entry.normalizedText && entry.normalizedText === normalizedText,
+  );
+
+  if (matchedIndex === -1) {
+    recentBotOutboundByConversation.set(conversationKey, retained);
+    return false;
+  }
+
+  retained.splice(matchedIndex, 1);
+  if (retained.length) {
+    recentBotOutboundByConversation.set(conversationKey, retained);
+  } else {
+    recentBotOutboundByConversation.delete(conversationKey);
+  }
+
+  return true;
+};
 
 const isGreetingCandidate = (value) => {
   const normalized = normalizeSurveyText(value);
@@ -971,6 +1070,23 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
       continue;
     }
     if (normalized.fromMe) {
+      if (
+        isWebhookFromKnownBotOutbound({
+          instanceName,
+          phoneNumber: normalized.phoneNumber,
+          text: normalized.text,
+          messageId: normalized.messageId,
+        })
+      ) {
+        console.log("↩️ Ignorado: mensaje saliente del bot (fromMe=true)", {
+          instanceName,
+          from: normalized.phoneNumber,
+          messageId: normalized.messageId || null,
+          textPreview: String(normalized.text || "").slice(0, 80),
+        });
+        continue;
+      }
+
       if (normalized.phoneNumber) {
         const gateKey = getConversationGateKey({
           instanceName,
@@ -1046,17 +1162,46 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
     });
     const gateState = whatsappConversationGate.get(gateKey);
     const now = Date.now();
+    let activeGateState = gateState;
 
-    if (gateState?.status === "muted" && gateState?.muteUntil > now) {
+    if (
+      activeGateState?.status === "muted" &&
+      activeGateState?.muteUntil <= now
+    ) {
+      whatsappConversationGate.delete(gateKey);
+      activeGateState = null;
+    }
+
+    if (
+      activeGateState?.status === "pending" &&
+      now - Number(activeGateState.askedAt || 0) >
+        WHATSAPP_PENDING_SURVEY_TTL_MS
+    ) {
+      whatsappConversationGate.delete(gateKey);
+      activeGateState = null;
+    }
+
+    if (
+      activeGateState?.status === "opted-in" &&
+      now - Number(activeGateState.updatedAt || 0) > WHATSAPP_OPTED_IN_TTL_MS
+    ) {
+      whatsappConversationGate.delete(gateKey);
+      activeGateState = null;
+    }
+
+    if (
+      activeGateState?.status === "muted" &&
+      activeGateState?.muteUntil > now
+    ) {
       console.log("⏭️ Ignorado por encuesta (mute activo):", {
         instanceName,
         from: normalized.phoneNumber,
-        muteUntil: new Date(gateState.muteUntil).toISOString(),
+        muteUntil: new Date(activeGateState.muteUntil).toISOString(),
       });
       continue;
     }
 
-    if (gateState?.status === "pending") {
+    if (activeGateState?.status === "pending") {
       let decision = resolveSurveyDecision(normalized);
 
       if (!decision && hasProcessableText(normalized.text)) {
@@ -1067,6 +1212,7 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
               incomingText: normalized.text,
               history: [],
               lastAssistantReply: "",
+              surveyQuestion: "Queres sacar un turno? Si/No",
             });
           decision = isTurnoIntent ? "yes" : "no";
           console.log("🧭 Encuesta pendiente: decision inferida por mensaje:", {
@@ -1121,7 +1267,7 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
       }
     }
 
-    if (!gateState && isGreetingCandidate(normalized.text)) {
+    if (!activeGateState && isGreetingCandidate(normalized.text)) {
       try {
         const pollResult = await sendPollMessage(
           normalized.phoneNumber,
