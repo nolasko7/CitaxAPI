@@ -841,7 +841,8 @@ const hasSuccessfulAppointmentBookingInHistory = (history = []) => {
       isAIMessage(message) &&
       Array.isArray(message.tool_calls) &&
       message.tool_calls.some(
-        (toolCall) => String(toolCall?.name || "").trim() === "create_appointment",
+        (toolCall) =>
+          String(toolCall?.name || "").trim() === "create_appointment",
       ),
   );
 
@@ -1287,7 +1288,8 @@ const createTools = ({
         time,
       }) => {
         const resolvedClientName =
-          String(trustedContactName || "").trim() || String(clientName || "").trim();
+          String(trustedContactName || "").trim() ||
+          String(clientName || "").trim();
 
         const appointment = await createAppointmentFromAssistant({
           companyId: companyContext.companyId,
