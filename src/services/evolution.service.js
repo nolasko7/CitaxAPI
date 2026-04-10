@@ -1,4 +1,6 @@
 ﻿const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
 const {
   processAudioMessage,
   AUDIO_DOWNLOAD_ERROR,
@@ -449,14 +451,24 @@ const sendPollMessage = async (phoneNumber, instanceName) => {
   const payloadCandidates = [
     {
       number,
-      name: "Hola, Queres sacar un turno?",
+      name: "Hola, ¿Cómo te puedo ayudar con tus turnos?",
       selectableCount: 1,
-      values: ["Si", "No"],
+      values: [
+        "Quiero sacar un turno",
+        "Necesito cancelar un turno",
+        "Quiero cambiar el horario",
+        "Ninguna de estas opciones",
+      ],
     },
     {
       number,
-      title: "Hola, Queres sacar un turno?",
-      options: ["Si", "No"],
+      title: "Hola, ¿Cómo te puedo ayudar con tus turnos?",
+      options: [
+        "Quiero sacar un turno",
+        "Necesito cancelar un turno",
+        "Quiero cambiar el horario",
+        "Ninguna de estas opciones",
+      ],
       selectableCount: 1,
     },
   ];
@@ -481,7 +493,8 @@ const sendPollMessage = async (phoneNumber, instanceName) => {
     }
   }
 
-  const fallbackText = "Queres sacar un turno? Si/No";
+  const fallbackText =
+    "Hola, ¿Cómo te puedo ayudar? Respondé: Sacar un turno / Cancelar un turno / Cambiar un turno / Ninguna de estas opciones";
   await sendTextMessage(number, fallbackText, normalizedInstanceName);
   return {
     sent: true,
@@ -663,6 +676,50 @@ const WHATSAPP_OPTED_IN_TTL_MS =
   Number(process.env.WHATSAPP_OPTED_IN_TTL_HOURS || 12) * 60 * 60 * 1000;
 const WHATSAPP_NO_REPLY_MUTE_MS =
   Number(process.env.WHATSAPP_NO_REPLY_MUTE_HOURS || 12) * 60 * 60 * 1000;
+const WHATSAPP_CONVERSATION_LOG_ENABLED =
+  (process.env.WHATSAPP_CONVERSATION_LOG_ENABLED || "true") === "true";
+const WHATSAPP_VERBOSE_LOGS =
+  (process.env.WHATSAPP_VERBOSE_LOGS || "false") === "true";
+const WHATSAPP_CONVERSATION_LOG_FILE =
+  process.env.WHATSAPP_CONVERSATION_LOG_FILE ||
+  path.join(__dirname, "../logs/whatsapp_conversations.ndjson");
+
+const maskPhoneForLog = (value) => {
+  const raw = String(value || "").replace(/[^\d]/g, "");
+  if (!raw) return "unknown";
+  if (raw.length <= 4) return raw;
+  return `***${raw.slice(-4)}`;
+};
+
+const compactText = (value, max = 80) =>
+  String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+
+const appendConversationLog = (entry = {}) => {
+  if (!WHATSAPP_CONVERSATION_LOG_ENABLED) return;
+
+  try {
+    fs.mkdirSync(path.dirname(WHATSAPP_CONVERSATION_LOG_FILE), {
+      recursive: true,
+    });
+    fs.appendFileSync(
+      WHATSAPP_CONVERSATION_LOG_FILE,
+      `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`,
+      "utf8",
+    );
+  } catch (error) {
+    console.error("⚠️ No se pudo escribir log de conversacion:", error.message);
+  }
+};
+
+const verboseLog = (...args) => {
+  if (WHATSAPP_VERBOSE_LOGS) {
+    console.log(...args);
+  }
+};
+
 const resolveMessageBatchWindowMs = () => {
   const configuredValue =
     process.env.WHATSAPP_MESSAGE_BUFFER_MS ||
@@ -834,15 +891,113 @@ const collectStringsFromKeyHints = (value, keyRegex, bucket = []) => {
   return bucket;
 };
 
+const SURVEY_SELECTION_PATHS = [
+  "pollUpdateMessage.vote.selectedOptions",
+  "message.pollUpdateMessage.vote.selectedOptions",
+  "data.pollUpdateMessage.vote.selectedOptions",
+  "pollResponseMessage.vote.selectedOptions",
+  "message.pollResponseMessage.vote.selectedOptions",
+  "data.pollResponseMessage.vote.selectedOptions",
+  "pollUpdateMessage.selectedOptions",
+  "pollUpdateMessage.votes",
+  "pollUpdateMessage.options",
+  "pollUpdateMessage.selectedOption",
+  "pollUpdateMessage.selectedOptionName",
+  "pollUpdateMessage.optionName",
+  "pollResponseMessage.selectedOptions",
+  "pollResponseMessage.votes",
+  "pollResponseMessage.options",
+  "pollResponseMessage.selectedOption",
+  "pollResponseMessage.selectedOptionName",
+  "pollResponseMessage.optionName",
+  "message.pollUpdateMessage.selectedOptions",
+  "message.pollUpdateMessage.votes",
+  "message.pollUpdateMessage.options",
+  "message.pollUpdateMessage.selectedOption",
+  "message.pollUpdateMessage.selectedOptionName",
+  "message.pollUpdateMessage.optionName",
+  "message.pollResponseMessage.selectedOptions",
+  "message.pollResponseMessage.votes",
+  "message.pollResponseMessage.options",
+  "message.pollResponseMessage.selectedOption",
+  "message.pollResponseMessage.selectedOptionName",
+  "message.pollResponseMessage.optionName",
+  "data.pollUpdateMessage.selectedOptions",
+  "data.pollUpdateMessage.votes",
+  "data.pollUpdateMessage.options",
+  "data.pollUpdateMessage.selectedOption",
+  "data.pollUpdateMessage.selectedOptionName",
+  "data.pollUpdateMessage.optionName",
+  "data.pollResponseMessage.selectedOptions",
+  "data.pollResponseMessage.votes",
+  "data.pollResponseMessage.options",
+  "data.pollResponseMessage.selectedOption",
+  "data.pollResponseMessage.selectedOptionName",
+  "data.pollResponseMessage.optionName",
+];
+
+const POLL_UPDATES_PATHS = [
+  "pollUpdates",
+  "data.pollUpdates",
+  "message.pollUpdates",
+  "pollUpdateMessage.pollUpdates",
+  "message.pollUpdateMessage.pollUpdates",
+  "data.pollUpdateMessage.pollUpdates",
+  "pollResponseMessage.pollUpdates",
+  "message.pollResponseMessage.pollUpdates",
+  "data.pollResponseMessage.pollUpdates",
+];
+
+const extractSelectedOptionsFromPollUpdates = (raw = {}) => {
+  const updates = POLL_UPDATES_PATHS
+    .map((path) => getNestedValue(raw, path))
+    .flatMap((value) => (Array.isArray(value) ? value : []));
+
+  return updates
+    .filter((entry) => entry && typeof entry === "object")
+    .filter((entry) => Array.isArray(entry.voters) && entry.voters.length > 0)
+    .map((entry) =>
+      String(entry.name || entry.optionName || entry.selectedOption || "").trim(),
+    )
+    .filter(Boolean);
+};
+
 const resolveYesNoFromValues = (values = []) => {
   const normalizedValues = values
-    .map((entry) => normalizeSurveyText(entry))
-    .filter(Boolean);
-  const hasYes = normalizedValues.some((entry) =>
-    /\b(si|yes|ok|dale)\b/.test(entry),
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean)
+    .map((entry) => ({
+      raw: entry,
+      normalized: normalizeSurveyText(entry),
+    }))
+    .filter(({ raw, normalized }) => {
+      if (!normalized) return false;
+      const rawLower = raw.toLowerCase();
+      if (rawLower.includes("@s.whatsapp.net")) return false;
+      if (rawLower.includes("@g.us")) return false;
+      if (/^\d{8,}$/.test(raw.replace(/\D/g, ""))) return false;
+      return true;
+    });
+
+  const hasYes = normalizedValues.some(
+    ({ normalized }) =>
+      normalized.includes("quiero sacar un turno") ||
+      normalized.includes("sacar un turno") ||
+      normalized.includes("necesito cancelar un turno") ||
+      normalized.includes("cancelar un turno") ||
+      normalized.includes("quiero cambiar el horario") ||
+      normalized.includes("cambiar el horario") ||
+      normalized.includes("cambiar un turno") ||
+      /\b(si|yes)\b/.test(normalized),
   );
-  const hasNo = normalizedValues.some((entry) =>
-    /\b(no|nop|nope)\b/.test(entry),
+  const hasNo = normalizedValues.some(
+    ({ normalized }) =>
+      normalized.includes("no quiero") ||
+      normalized.includes("ninguna de estas opciones") ||
+      normalized === "ninguna" ||
+      normalized.includes("ninguna opcion") ||
+      normalized.includes("no por ahora") ||
+      /\b(no|nop|nope)\b/.test(normalized),
   );
 
   if (hasYes && !hasNo) return "yes";
@@ -850,43 +1005,149 @@ const resolveYesNoFromValues = (values = []) => {
   return null;
 };
 
-const resolveSurveyDecision = (normalized) => {
+const findBestSurveySelectedText = (values = []) => {
+  const candidates = values
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean)
+    .filter((entry) => {
+      const lower = entry.toLowerCase();
+      if (lower.includes("@s.whatsapp.net")) return false;
+      if (lower.includes("@g.us")) return false;
+      return true;
+    });
+
+  const preferred = candidates.find((entry) => {
+    const normalized = normalizeSurveyText(entry);
+    return (
+      normalized.includes("quiero sacar un turno") ||
+      normalized.includes("sacar un turno") ||
+      normalized.includes("necesito cancelar un turno") ||
+      normalized.includes("cancelar un turno") ||
+      normalized.includes("quiero cambiar el horario") ||
+      normalized.includes("cambiar el horario") ||
+      normalized.includes("cambiar un turno") ||
+      normalized.includes("no quiero") ||
+      normalized.includes("ninguna de estas opciones")
+    );
+  });
+
+  return preferred || candidates[0] || "";
+};
+
+const resolveSurveyOutcome = (normalized) => {
   const raw = normalized?.raw || {};
 
-  const explicitSelectionPaths = [
-    "pollUpdateMessage.selectedOptions",
-    "pollUpdateMessage.votes",
-    "pollResponseMessage.selectedOptions",
-    "pollResponseMessage.votes",
-    "message.pollUpdateMessage.selectedOptions",
-    "message.pollUpdateMessage.votes",
-    "message.pollResponseMessage.selectedOptions",
-    "message.pollResponseMessage.votes",
-    "data.pollUpdateMessage.selectedOptions",
-    "data.pollResponseMessage.selectedOptions",
-  ];
+  const selectedFromPollUpdates = extractSelectedOptionsFromPollUpdates(raw);
 
-  const explicitSelectionValues = explicitSelectionPaths
+  const explicitSelectionValues = SURVEY_SELECTION_PATHS
     .map((path) => getNestedValue(raw, path))
     .filter(Boolean)
     .flatMap((entry) => collectStringValues(entry, []));
 
-  const explicitDecision = resolveYesNoFromValues(explicitSelectionValues);
-  if (explicitDecision) return explicitDecision;
+  const selectedCandidates = [
+    ...selectedFromPollUpdates,
+    ...explicitSelectionValues,
+  ];
 
-  const textNormalized = normalizeSurveyText(normalized?.text || "");
-  if (["si", "s", "yes", "dale", "ok"].includes(textNormalized)) return "yes";
-  if (["no", "nop", "n", "nope"].includes(textNormalized)) return "no";
+  const explicitDecision = resolveYesNoFromValues(selectedCandidates);
+  if (explicitDecision) {
+    return {
+      decision: explicitDecision,
+      selectedText: findBestSurveySelectedText(selectedCandidates),
+    };
+  }
+
+  const textRaw = String(normalized?.text || "").trim();
+  const textNormalized = normalizeSurveyText(textRaw);
+  if (["si", "s", "yes", "dale", "ok"].includes(textNormalized)) {
+    return { decision: "yes", selectedText: textRaw };
+  }
+  if (
+    ["no", "nop", "n", "nope", "no quiero", "no por ahora"].includes(
+      textNormalized,
+    )
+  ) {
+    return { decision: "no", selectedText: textRaw };
+  }
+
+  const hasPollEnvelope =
+    Boolean(raw?.pollUpdateMessage) ||
+    Boolean(raw?.pollResponseMessage) ||
+    Boolean(raw?.message?.pollUpdateMessage) ||
+    Boolean(raw?.message?.pollResponseMessage) ||
+    Boolean(raw?.data?.pollUpdateMessage) ||
+    Boolean(raw?.data?.pollResponseMessage) ||
+    POLL_UPDATES_PATHS.some((pollPath) =>
+      Array.isArray(getNestedValue(raw, pollPath)),
+    );
+
+  if (hasPollEnvelope) {
+    return { decision: null, selectedText: "" };
+  }
 
   const hintedSelectionValues = collectStringsFromKeyHints(
     raw,
-    /(selected|vote|choice|chosen|answer)/i,
+    /(selected|vote|choice|chosen|answer|option)/i,
     [],
   );
   const hintedDecision = resolveYesNoFromValues(hintedSelectionValues);
-  if (hintedDecision) return hintedDecision;
+  if (hintedDecision) {
+    return {
+      decision: hintedDecision,
+      selectedText: findBestSurveySelectedText(hintedSelectionValues),
+    };
+  }
 
-  return null;
+  const deepStringValues = collectStringValues(raw, []);
+  const deepDecision = resolveYesNoFromValues(deepStringValues);
+  if (deepDecision) {
+    return {
+      decision: deepDecision,
+      selectedText: findBestSurveySelectedText(deepStringValues),
+    };
+  }
+
+  return { decision: null, selectedText: "" };
+};
+
+const mapSurveySelectionToIntentText = ({
+  selectedSurveyText,
+  extraText = "",
+}) => {
+  const selected = normalizeSurveyText(selectedSurveyText);
+  const extra = String(extraText || "").trim();
+
+  if (selected.includes("cambiar")) {
+    return [
+      "Quiero cambiar un turno.",
+      "Mostrame mis turnos pendientes de este numero para elegir cual cambiar.",
+      extra,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+  }
+
+  if (selected.includes("cancelar")) {
+    return [
+      "Quiero cancelar un turno.",
+      "Mostrame mis turnos pendientes de este numero para elegir cual cancelar.",
+      extra,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+  }
+
+  if (selected.includes("sacar")) {
+    return ["Quiero sacar un turno.", extra].filter(Boolean).join(" ").trim();
+  }
+
+  return [selectedSurveyText, extra].filter(Boolean).join(" ").trim();
+};
+
+const resolveSurveyDecision = (normalized) => {
+  return resolveSurveyOutcome(normalized).decision;
 };
 
 const storeRecentMessage = (instanceName, normalized) => {
@@ -959,11 +1220,16 @@ const flushIncomingMessageBatch = async (batchKey) => {
     runWhatsappAssistant,
   } = require("./ai/geminiService");
 
-  console.log("🧩 Procesando lote de mensajes:", {
+  console.log(
+    `🧩 Lote | from=${maskPhoneForLog(mergedMessage.phoneNumber)} | msgs=${mergedMessage.mergedCount} | "${compactText(mergedMessage.text)}"`,
+  );
+
+  appendConversationLog({
+    event: "batch_received",
     instanceName,
-    from: mergedMessage.phoneNumber,
-    count: mergedMessage.mergedCount,
-    textPreview: String(mergedMessage.text || "").slice(0, 150),
+    phone: mergedMessage.phoneNumber,
+    mergedCount: mergedMessage.mergedCount,
+    text: String(mergedMessage.text || ""),
   });
 
   try {
@@ -975,11 +1241,29 @@ const flushIncomingMessageBatch = async (batchKey) => {
             incomingMessage: mergedMessage,
           });
 
-    console.log("🤖 Resultado IA:", {
-      enabled: aiResponse?.enabled,
+    const aiLogText = aiResponse?.text
+      ? String(aiResponse.text).replace(/\r?\n/g, "\\n")
+      : "";
+
+    console.log(
+      `🤖 IA | from=${maskPhoneForLog(mergedMessage.phoneNumber)} | enabled=${Boolean(aiResponse?.enabled)} | hasText=${Boolean(aiResponse?.text)}${aiResponse?.reason ? ` | reason=${aiResponse.reason}` : ""}${aiLogText ? ` | text="${aiLogText}"` : ""}`,
+    );
+
+    if (Array.isArray(aiResponse?.usedTools) && aiResponse.usedTools.length) {
+      console.log(`🛠️ TOOLS | ${aiResponse.usedTools.join(", ")}`);
+    }
+
+    appendConversationLog({
+      event: "ai_result",
+      instanceName,
+      phone: mergedMessage.phoneNumber,
+      enabled: Boolean(aiResponse?.enabled),
       hasText: Boolean(aiResponse?.text),
       reason: aiResponse?.reason || null,
-      textPreview: (aiResponse?.text || "").slice(0, 150),
+      usedTools: Array.isArray(aiResponse?.usedTools)
+        ? aiResponse.usedTools
+        : [],
+      text: aiResponse?.text || "",
     });
 
     if (aiResponse?.enabled && aiResponse?.text) {
@@ -988,9 +1272,41 @@ const flushIncomingMessageBatch = async (batchKey) => {
         aiResponse.text,
         instanceName,
       );
-      console.log("✅ Respuesta IA enviada a:", mergedMessage.phoneNumber);
+      console.log(`📤 OUT | to=${maskPhoneForLog(mergedMessage.phoneNumber)}`);
+      appendConversationLog({
+        event: "outbound_sent",
+        instanceName,
+        phone: mergedMessage.phoneNumber,
+        text: aiResponse.text,
+      });
     } else {
-      console.log("ℹ️ IA no respondió:", aiResponse?.reason || "sin razón");
+      console.log(`🔇 OUT | reason=${aiResponse?.reason || "n/a"}`);
+      appendConversationLog({
+        event: "outbound_skipped",
+        instanceName,
+        phone: mergedMessage.phoneNumber,
+        reason: aiResponse?.reason || "sin razon",
+      });
+    }
+
+    const createdAppointment =
+      instanceName !== normalizeInstanceName(SUPPORT_INSTANCE_NAME) &&
+      Array.isArray(aiResponse?.usedTools) &&
+      aiResponse.usedTools.includes("create_appointment") &&
+      mergedMessage.phoneNumber;
+
+    if (createdAppointment) {
+      const gateKey = getConversationGateKey({
+        instanceName,
+        phoneNumber: mergedMessage.phoneNumber,
+      });
+      whatsappConversationGate.set(gateKey, {
+        status: "needs_survey",
+        updatedAt: Date.now(),
+      });
+      console.log(
+        `🔄 Flujo reiniciado | from=${maskPhoneForLog(mergedMessage.phoneNumber)} | reason=appointment_confirmed`,
+      );
     }
   } catch (error) {
     console.error(
@@ -1040,10 +1356,9 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
   const ignoredPhones = await getIgnoredPhonesForInstance(instanceName);
 
   if (!messages.length) {
-    console.log("ðŸ“¡ Evento de WhatsApp recibido (sin mensajes):", {
-      instanceName,
-      event: webhookData?.event || webhookData?.type || "unknown",
-    });
+    console.log(
+      `📭 Webhook sin mensajes | inst=${instanceName} | event=${webhookData?.event || webhookData?.type || "unknown"}`,
+    );
     return;
   }
 
@@ -1055,18 +1370,24 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
     );
     storeRecentMessage(instanceName, normalized);
 
-    console.log("ðŸ“© Mensaje entrante:", {
+    console.log(
+      `📩 IN | from=${maskPhoneForLog(normalized.phoneNumber)} | type=${normalized.rawType || normalized.messageType} | "${compactText(normalized.text)}"`,
+    );
+
+    appendConversationLog({
+      event: "incoming",
       instanceName,
-      from: normalized.phoneNumber,
+      phone: normalized.phoneNumber,
       pushName: normalized.pushName,
-      text: String(normalized.text || "").slice(0, 100),
+      text: String(normalized.text || ""),
       fromMe: normalized.fromMe,
       isGroup: normalized.isGroup,
+      messageType: normalized.rawType || normalized.messageType,
     });
 
     // Skip groups, self-messages, or messages without phone
     if (normalized.isGroup) {
-      console.log("â­ï¸ Ignorado: es grupo");
+      verboseLog("⏭️ Ignorado: grupo");
       continue;
     }
     if (normalized.fromMe) {
@@ -1078,12 +1399,9 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
           messageId: normalized.messageId,
         })
       ) {
-        console.log("↩️ Ignorado: mensaje saliente del bot (fromMe=true)", {
-          instanceName,
-          from: normalized.phoneNumber,
-          messageId: normalized.messageId || null,
-          textPreview: String(normalized.text || "").slice(0, 80),
-        });
+        console.log(
+          `↩️ Ignorado bot-outbound | from=${maskPhoneForLog(normalized.phoneNumber)}`,
+        );
         continue;
       }
 
@@ -1111,27 +1429,20 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
         pendingIncomingMessageBatches.delete(batchKey);
 
         console.log(
-          "🛑 Contacto silenciado por mensaje manual (fromMe=true):",
-          {
-            instanceName,
-            from: normalized.phoneNumber,
-            muteUntil: new Date(muteUntil).toISOString(),
-          },
+          `🛑 Muted manual | from=${maskPhoneForLog(normalized.phoneNumber)} | until=${new Date(muteUntil).toISOString()}`,
         );
       }
-      console.log("â­ï¸ Ignorado: fromMe=true");
       continue;
     }
     if (!normalized.phoneNumber) {
-      console.log("â­ï¸ Ignorado: sin telÃ©fono");
+      verboseLog("⏭️ Ignorado: sin teléfono");
       continue;
     }
 
     if (ignoredPhones.has(normalized.phoneNumber)) {
-      console.log("Ã¢ÂÂ­Ã¯Â¸Â Ignorado por blacklist:", {
-        instanceName,
-        from: normalized.phoneNumber,
-      });
+      verboseLog(
+        `⏭️ Ignorado blacklist | from=${maskPhoneForLog(normalized.phoneNumber)}`,
+      );
       continue;
     }
     if (
@@ -1140,10 +1451,9 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
         phoneNumber: normalized.phoneNumber,
       })
     ) {
-      console.log("⏭️ Ignorado: numero interno de plataforma", {
-        instanceName,
-        from: normalized.phoneNumber,
-      });
+      verboseLog(
+        `⏭️ Ignorado interno | from=${maskPhoneForLog(normalized.phoneNumber)}`,
+      );
       continue;
     }
 
@@ -1152,7 +1462,7 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
     const staticStatus =
       connectionState?.instance?.state || connectionState?.state || "unknown";
     if (staticStatus !== "open") {
-      console.log("â­ï¸ Ignorado: instancia no abierta, status:", staticStatus);
+      verboseLog(`⏭️ Instancia no abierta | state=${staticStatus}`);
       continue;
     }
 
@@ -1189,38 +1499,100 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
       activeGateState = null;
     }
 
+    if (activeGateState?.status === "needs_survey") {
+      try {
+        const pollResult = await sendPollMessage(
+          normalized.phoneNumber,
+          instanceName,
+        );
+        whatsappConversationGate.set(gateKey, {
+          status: "pending",
+          askedAt: now,
+          updatedAt: now,
+        });
+        console.log(
+          `📊 Encuesta | to=${maskPhoneForLog(normalized.phoneNumber)} | provider=${pollResult?.provider || "unknown"}`,
+        );
+      } catch (error) {
+        console.error(
+          "❌ No se pudo enviar encuesta reiniciada:",
+          error.message,
+        );
+      }
+      continue;
+    }
+
     if (
       activeGateState?.status === "muted" &&
       activeGateState?.muteUntil > now
     ) {
-      console.log("⏭️ Ignorado por encuesta (mute activo):", {
-        instanceName,
-        from: normalized.phoneNumber,
-        muteUntil: new Date(activeGateState.muteUntil).toISOString(),
-      });
+      verboseLog(
+        `⏭️ Mute activo | from=${maskPhoneForLog(normalized.phoneNumber)} | until=${new Date(activeGateState.muteUntil).toISOString()}`,
+      );
       continue;
     }
 
     if (activeGateState?.status === "pending") {
-      let decision = resolveSurveyDecision(normalized);
+      const surveyOutcome = resolveSurveyOutcome(normalized);
+      let decision = surveyOutcome.decision;
+      const isPollPayload = /poll/i.test(
+        String(normalized.rawType || normalized.messageType || ""),
+      );
+      const selectedSurveyText = String(
+        surveyOutcome.selectedText || "",
+      ).trim();
 
-      if (!decision && hasProcessableText(normalized.text)) {
+      const currentText = hasProcessableText(normalized.text)
+        ? String(normalized.text || "").trim()
+        : "";
+      const bufferedText = String(
+        activeGateState?.pendingBufferedText || "",
+      ).trim();
+
+      if (activeGateState?.preconfirmedYesAt && !isPollPayload && currentText) {
+        decision = "yes";
+        normalized.text = `Si ${[bufferedText, currentText]
+          .filter(Boolean)
+          .join(" ")
+          .trim()}`;
+      }
+
+      if (!decision && !isPollPayload && currentText) {
+        const mergedPendingText = [bufferedText, currentText]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+
+        if (!bufferedText) {
+          whatsappConversationGate.set(gateKey, {
+            ...activeGateState,
+            status: "pending",
+            pendingBufferedText: mergedPendingText,
+            updatedAt: now,
+          });
+          verboseLog(
+            `⏸️ Encuesta pendiente | texto guardado from=${maskPhoneForLog(normalized.phoneNumber)}`,
+          );
+          continue;
+        }
+
         try {
           const { __testables } = require("./ai/geminiService");
           const isTurnoIntent =
             await __testables.isAppointmentRelatedInteraction({
-              incomingText: normalized.text,
+              incomingText: mergedPendingText,
               history: [],
               lastAssistantReply: "",
-              surveyQuestion: "Queres sacar un turno? Si/No",
+              surveyQuestion:
+                "¿Cómo te puedo ayudar con tus turnos? Opciones: Sacar un turno, Cancelar un turno, Cambiar un turno, No quiero",
             });
           decision = isTurnoIntent ? "yes" : "no";
-          console.log("🧭 Encuesta pendiente: decision inferida por mensaje:", {
-            instanceName,
-            from: normalized.phoneNumber,
-            decision,
-            textPreview: String(normalized.text || "").slice(0, 100),
-          });
+          verboseLog(
+            `🧭 Encuesta inferida | from=${maskPhoneForLog(normalized.phoneNumber)} | decision=${decision}`,
+          );
+          if (decision === "yes") {
+            normalized.text = `Si ${mergedPendingText}`;
+          }
         } catch (error) {
           console.warn(
             "⚠️ No se pudo inferir decision en encuesta pendiente:",
@@ -1234,16 +1606,52 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
         }
       }
 
+      if (!decision && isPollPayload) {
+        verboseLog(
+          `⏸️ Encuesta sin decision | from=${maskPhoneForLog(normalized.phoneNumber)} | type=${normalized.rawType || normalized.messageType}`,
+        );
+      }
+
+      if (decision === "yes" && isPollPayload) {
+        const combinedWithBuffer = [
+          selectedSurveyText,
+          bufferedText,
+          currentText,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+
+        if (combinedWithBuffer) {
+          normalized.text =
+            mapSurveySelectionToIntentText({
+              selectedSurveyText,
+              extraText: [bufferedText, currentText].filter(Boolean).join(" "),
+            }) || `Si ${combinedWithBuffer}`;
+          normalized.rawType = "pollResponseSynthetic";
+        } else {
+          whatsappConversationGate.set(gateKey, {
+            ...activeGateState,
+            status: "pending",
+            preconfirmedYesAt: now,
+            updatedAt: now,
+          });
+          verboseLog(
+            `⏸️ Encuesta=SI sin texto | esperando detalle from=${maskPhoneForLog(normalized.phoneNumber)}`,
+          );
+          continue;
+        }
+      }
+
       if (decision === "no") {
         whatsappConversationGate.set(gateKey, {
           status: "muted",
           muteUntil: now + WHATSAPP_NO_REPLY_MUTE_MS,
           updatedAt: now,
         });
-        console.log("🙅 Usuario rechazo encuesta, se silencia 12h:", {
-          instanceName,
-          from: normalized.phoneNumber,
-        });
+        console.log(
+          `🙅 Encuesta=NO | from=${maskPhoneForLog(normalized.phoneNumber)} | muted=12h`,
+        );
         continue;
       }
 
@@ -1254,35 +1662,40 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
         });
 
         if (!hasProcessableText(normalized.text)) {
-          normalized.text = "Quiero sacar un turno";
+          normalized.text =
+            mapSurveySelectionToIntentText({
+              selectedSurveyText,
+            }) ||
+            selectedSurveyText ||
+            "Si";
           normalized.rawType = "pollResponseSynthetic";
         }
       } else {
-        console.log("⏸️ Esperando respuesta de encuesta Si/No:", {
-          instanceName,
-          from: normalized.phoneNumber,
-          rawType: normalized.rawType || normalized.messageType,
-        });
+        verboseLog(
+          `⏸️ Esperando encuesta | from=${maskPhoneForLog(normalized.phoneNumber)} | type=${normalized.rawType || normalized.messageType}`,
+        );
         continue;
       }
     }
 
-    if (!activeGateState && isGreetingCandidate(normalized.text)) {
+    if (!activeGateState) {
       try {
         const pollResult = await sendPollMessage(
           normalized.phoneNumber,
           instanceName,
         );
+        const firstBufferedText = hasProcessableText(normalized.text)
+          ? String(normalized.text || "").trim()
+          : "";
         whatsappConversationGate.set(gateKey, {
           status: "pending",
           askedAt: now,
           updatedAt: now,
+          pendingBufferedText: firstBufferedText,
         });
-        console.log("📊 Encuesta enviada:", {
-          instanceName,
-          from: normalized.phoneNumber,
-          provider: pollResult?.provider || "unknown",
-        });
+        console.log(
+          `📊 Encuesta | to=${maskPhoneForLog(normalized.phoneNumber)} | provider=${pollResult?.provider || "unknown"}`,
+        );
       } catch (error) {
         console.error("❌ No se pudo enviar encuesta inicial:", error.message);
       }
@@ -1291,31 +1704,21 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
 
     // Audio Transcription logic
     if (normalized.isAudio) {
-      console.log("ðŸŽ™ï¸ Procesando mensaje de audio...");
+      verboseLog("🎙️ Procesando audio...");
       const transcript = await processAudioMessage(
         instanceName,
         normalized.messageId,
       );
       normalized.text = transcript;
-      console.log("ðŸ“ Audio transcrito:", transcript);
-    } else {
-      console.log(
-        "â„¹ï¸ Tipo de mensaje:",
-        normalized.rawType || normalized.messageType,
-      );
     }
 
     if (!hasProcessableText(normalized.text)) {
-      console.log("â­ï¸ Ignorado: mensaje sin contenido procesable", {
-        instanceName,
-        from: normalized.phoneNumber,
-        messageId: normalized.messageId,
-        messageType: normalized.rawType || normalized.messageType,
-      });
+      verboseLog(
+        `⏭️ Sin contenido procesable | from=${maskPhoneForLog(normalized.phoneNumber)} | type=${normalized.rawType || normalized.messageType}`,
+      );
       continue;
     }
 
-    console.log("🧠 Encolando mensaje para IA:", normalized.phoneNumber);
     enqueueIncomingMessageForAssistant({ instanceName, normalized });
   }
 };

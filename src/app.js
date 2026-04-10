@@ -14,10 +14,24 @@ const publicRoutes = require("./routes/public.routes");
 const app = express();
 const fs = require("fs");
 const path = require("path");
+const REQUEST_LOG_ENABLED =
+  (process.env.REQUEST_LOG_ENABLED || "false") === "true";
 
 // Simple request logger for diagnosis
 app.use((req, res, next) => {
-  const log = `📡 [${new Date().toLocaleTimeString()}] ${req.method} ${req.url} - Origin: ${req.get("origin") || "direct"}\n`;
+  if (!REQUEST_LOG_ENABLED) {
+    return next();
+  }
+
+  const shouldSkipNotificationsPolling =
+    req.url.startsWith("/api/notifications") &&
+    (req.method === "GET" || req.method === "OPTIONS");
+
+  if (shouldSkipNotificationsPolling) {
+    return next();
+  }
+
+  const log = `📡 [${new Date().toLocaleTimeString()}] ${req.method} ${req.url} | ${req.get("origin") || "direct"}\n`;
   console.log(log.trim());
   try {
     fs.appendFileSync(path.join(__dirname, "../debug_out.txt"), log);

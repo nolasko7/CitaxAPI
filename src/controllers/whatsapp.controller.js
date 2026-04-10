@@ -218,28 +218,31 @@ const handleWebhook = async (req, res, next) => {
     );
     const payload = req.body;
 
-    console.log("WEBHOOK RECIBIDO:", {
-      instanceName,
-      event: payload?.event || "unknown",
-      hasData: Boolean(payload?.data),
-    });
+    const eventName = payload?.event || "unknown";
+    const shouldLogEvent = new Set(["connection.update", "qrcode.updated"]).has(
+      eventName,
+    );
+
+    if (shouldLogEvent) {
+      console.log(
+        `📩 Webhook | event=${eventName} | instance=${instanceName} | hasData=${Boolean(payload?.data)}`,
+      );
+    }
 
     res.status(200).json({ received: true });
 
     if (payload?.event === "qrcode.updated") {
       storeLatestQr(instanceName, payload);
-      console.log("🔳 QR actualizado:", {
-        instanceName,
-        hasQr: getLatestQr(instanceName)?.source !== "none",
-      });
+      console.log(
+        `🔳 WhatsApp QR | instance=${instanceName} | hasQr=${getLatestQr(instanceName)?.source !== "none"}`,
+      );
     }
 
     if (payload?.event === "connection.update") {
       const state = payload?.data?.state || payload?.state || "unknown";
-      console.log("🔌 Estado de conexión WhatsApp:", {
-        instanceName,
-        state,
-      });
+      console.log(
+        `🔌 WhatsApp conexión | instance=${instanceName} | state=${state}`,
+      );
       if (state === "open") {
         clearLatestQr(instanceName);
       }

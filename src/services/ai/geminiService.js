@@ -472,6 +472,18 @@ const extractAssistantReplyFromMessages = (messages = []) => {
   };
 };
 
+const extractExecutedToolNames = (messages = []) => {
+  const names = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (!isAIMessage(message) || !Array.isArray(message.tool_calls)) continue;
+    for (const toolCall of message.tool_calls) {
+      const toolName = String(toolCall?.name || "").trim();
+      if (toolName) names.push(toolName);
+    }
+  }
+  return [...new Set(names)];
+};
+
 const normalizeAssistantText = (value) =>
   String(value || "")
     .toLowerCase()
@@ -832,6 +844,102 @@ const sanitizeNonReplyOutput = (value) => {
 
 const FINAL_REPLY_RECOVERY_PROMPT =
   "Con toda la informacion y resultados de herramientas anteriores, responde ahora al cliente con un mensaje final breve en español rioplatense. No llames herramientas, no expliques pasos internos y no dejes la respuesta vacia.";
+const TRUNCATED_REPLY_RECOVERY_PROMPT =
+  "Tu respuesta anterior quedo truncada o incompleta. Reescribi una respuesta final completa en español rioplatense, sin cortar frases. Si estas listando turnos, inclui TODOS los turnos relevantes que tengas en los resultados de herramientas. No llames herramientas ni expliques pasos internos.";
+
+const looksLikeTruncatedReply = (value = "") => {
+  const reply = String(value || "").trim();
+  if (!reply) return false;
+
+  const normalized = normalizeAssistantText(reply);
+  if (!normalized) return false;
+
+  if (/\ba las\s*$/i.test(reply)) return true;
+  if (/\($/.test(reply) || /\([^)\n]*$/.test(reply)) return true;
+  if (/[:;,\-]\s*$/.test(reply)) return true;
+
+  const lines = reply.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const lastLine = lines[lines.length - 1] || "";
+  if (/^[-*]\s+.+\ba las\s*$/i.test(lastLine)) return true;
+
+  if (/^\d+[\).]\s+.+\ba las\s*$/i.test(lastLine)) return true;
+
+  const hasBulletList = lines.some((line) => /^[-*]\s+/.test(line));
+  const hasNumberedList = lines.some((line) => /^\d+[\).]\s+/.test(line));
+  const endsWithStrongPunctuation = /[.!?]$/.test(reply);
+
+  if ((hasBulletList || hasNumberedList) && !endsWithStrongPunctuation) {
+    return true;
+  }
+
+  const openParens = (reply.match(/\(/g) || []).length;
+  const closeParens = (reply.match(/\)/g) || []).length;
+  if (openParens > closeParens) {
+    return true;
+  }
+
+  return false;
+};
+
+const shouldAttemptTruncationRecovery = ({ reply = "", usedTools = [] }) => {
+  if (!looksLikeTruncatedReply(reply)) return false;
+
+  const tools = Array.isArray(usedTools) ? usedTools : [];
+  if (
+    tools.includes("get_appointments_by_day") ||
+    tools.includes("cancel_appointment")
+  ) {
+    return true;
+  }
+
+  return /\n\s*[-*]\s+/.test(String(reply || ""));
+};
+
+const extractAppointmentsFromToolMessages = (messages = []) => {
+  const reversed = [...(Array.isArray(messages) ? messages : [])].reverse();
+  for (const message of reversed) {
+    if (message?._getType?.() !== "tool") continue;
+    const raw = stringifyMessageContent(message?.content).trim();
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed?.appointments)) {
+        return parsed.appointments;
+      }
+    } catch (_) {}
+  }
+  return [];
+};
+
+const buildDeterministicAppointmentsReply = ({
+  appointments = [],
+  referenceDate,
+  timezone,
+  contactName = "",
+}) => {
+  if (!Array.isArray(appointments) || !appointments.length) {
+    return "No encontré turnos agendados por ahora.";
+  }
+
+  const introName = String(contactName || "").trim();
+  const intro = introName
+    ? `Hola ${introName}, estos son los turnos que tenés agendados:`
+    : "Estos son los turnos que tenés agendados:";
+
+  const lines = appointments.map((appointment, index) => {
+    const humanDate = formatNaturalDate({
+      date: appointment?.date,
+      referenceDate,
+      timezone,
+    });
+    const time = String(appointment?.time || "").trim();
+    const service = String(appointment?.serviceName || "").trim();
+    const serviceSuffix = service ? ` (${service})` : "";
+    return `${index + 1}. ${humanDate} a las ${time}${serviceSuffix}`;
+  });
+
+  return `${intro}\n\n${lines.join("\n")}`.trim();
+};
 
 const hasSuccessfulAppointmentBookingInHistory = (history = []) => {
   const messages = Array.isArray(history) ? history : [];
@@ -1175,16 +1283,22 @@ const createGeminiModel = () => {
   return new ChatGoogleGenerativeAI(modelOptions);
 };
 
-const buildFinalReplyRecoveryMessages = (messages = []) => {
+const buildFinalReplyRecoveryMessages = (
+  messages = [],
+  prompt = FINAL_REPLY_RECOVERY_PROMPT,
+) => {
   return [
     ...(Array.isArray(messages) ? messages : []),
-    new HumanMessage(FINAL_REPLY_RECOVERY_PROMPT),
+    new HumanMessage(prompt),
   ];
 };
 
-const synthesizeFinalReplyFromMessages = async ({ messages }) => {
+const synthesizeFinalReplyFromMessages = async ({
+  messages,
+  prompt = FINAL_REPLY_RECOVERY_PROMPT,
+}) => {
   const recoveryResponse = await createGeminiModel().invoke(
-    buildFinalReplyRecoveryMessages(messages),
+    buildFinalReplyRecoveryMessages(messages, prompt),
   );
   const { reply } = extractAssistantReplyFromMessages([recoveryResponse]);
   return sanitizeNonReplyOutput(reply);
@@ -1878,20 +1992,6 @@ const runWhatsappAssistant = async ({
     };
   }
 
-  const isRelatedToAppointments = await isAppointmentRelatedInteraction({
-    incomingText: messageText,
-    history,
-    lastAssistantReply: sessionState.lastAssistantReply || "",
-  });
-
-  if (!isRelatedToAppointments) {
-    return {
-      enabled: false,
-      reason: "Mensaje fuera de alcance de turnos.",
-      companyContext: effectiveCompanyContext,
-    };
-  }
-
   const { result, provider } = await invokeGeminiGraph({
     tools,
     messages: [
@@ -1903,19 +2003,10 @@ const runWhatsappAssistant = async ({
     ],
   });
 
-  console.log("Graph invoke:", {
-    instanceName,
-    customerPhone,
-    provider: provider.label,
-    model: provider.model,
-    historyLen: history.length,
-    stateless: false,
-    resultMessages: result.messages?.length || 0,
-  });
-
   const { reply } = extractAssistantReplyFromMessages(result.messages);
+  const usedTools = extractExecutedToolNames(result.messages);
   const hadPriorReply = Boolean(sessionState.lastAssistantReply);
-  const finalReply = sanitizeNonReplyOutput(
+  let finalReply = sanitizeNonReplyOutput(
     ensureFriendlyFirstReply({
       reply: sanitizeAssistantOpening({
         reply: ensureAppointmentConfirmationClosing(reply),
@@ -1927,11 +2018,49 @@ const runWhatsappAssistant = async ({
     }),
   );
 
+  if (
+    shouldAttemptTruncationRecovery({
+      reply: finalReply,
+      usedTools,
+    })
+  ) {
+    try {
+      const recovered = await synthesizeFinalReplyFromMessages({
+        messages: result.messages,
+        prompt: TRUNCATED_REPLY_RECOVERY_PROMPT,
+      });
+      if (recovered) {
+        finalReply = recovered;
+      }
+    } catch (error) {
+      console.warn(
+        "⚠️ Fallo recovery de respuesta truncada, se usa respuesta original:",
+        error.message,
+      );
+    }
+  }
+
+  if (
+    usedTools.includes("get_appointments_by_day") &&
+    looksLikeTruncatedReply(finalReply)
+  ) {
+    const appointments = extractAppointmentsFromToolMessages(result.messages);
+    if (appointments.length) {
+      finalReply = buildDeterministicAppointmentsReply({
+        appointments,
+        referenceDate: effectiveCompanyContext.currentDate,
+        timezone: effectiveCompanyContext.timezone,
+        contactName: preferredName,
+      });
+    }
+  }
+
   if (!finalReply) {
     return {
       enabled: false,
       reason: "El asistente decidio no responder.",
       companyContext: effectiveCompanyContext,
+      usedTools,
     };
   }
 
@@ -1950,6 +2079,7 @@ const runWhatsappAssistant = async ({
     enabled: true,
     text: finalReply,
     companyContext: effectiveCompanyContext,
+    usedTools,
   };
 };
 
@@ -2035,14 +2165,6 @@ ${buildTemporalReferenceText(realtimeContext)}`;
       ...history,
       new HumanMessage(messageText),
     ],
-  });
-
-  console.log("ÃƒÂ°Ã…Â¸Ã‚Â¤Ã¢â‚¬â€œ Support graph invoke:", {
-    customerPhone,
-    provider: provider.label,
-    model: provider.model,
-    historyLen: history.length,
-    resultMessages: result.messages?.length || 0,
   });
 
   const { reply } = extractAssistantReplyFromMessages(result.messages);
