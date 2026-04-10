@@ -858,7 +858,10 @@ const looksLikeTruncatedReply = (value = "") => {
   if (/\($/.test(reply) || /\([^)\n]*$/.test(reply)) return true;
   if (/[:;,\-]\s*$/.test(reply)) return true;
 
-  const lines = reply.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const lines = reply
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
   const lastLine = lines[lines.length - 1] || "";
   if (/^[-*]\s+.+\ba las\s*$/i.test(lastLine)) return true;
 

@@ -949,15 +949,17 @@ const POLL_UPDATES_PATHS = [
 ];
 
 const extractSelectedOptionsFromPollUpdates = (raw = {}) => {
-  const updates = POLL_UPDATES_PATHS
-    .map((path) => getNestedValue(raw, path))
-    .flatMap((value) => (Array.isArray(value) ? value : []));
+  const updates = POLL_UPDATES_PATHS.map((path) =>
+    getNestedValue(raw, path),
+  ).flatMap((value) => (Array.isArray(value) ? value : []));
 
   return updates
     .filter((entry) => entry && typeof entry === "object")
     .filter((entry) => Array.isArray(entry.voters) && entry.voters.length > 0)
     .map((entry) =>
-      String(entry.name || entry.optionName || entry.selectedOption || "").trim(),
+      String(
+        entry.name || entry.optionName || entry.selectedOption || "",
+      ).trim(),
     )
     .filter(Boolean);
 };
@@ -1039,8 +1041,9 @@ const resolveSurveyOutcome = (normalized) => {
 
   const selectedFromPollUpdates = extractSelectedOptionsFromPollUpdates(raw);
 
-  const explicitSelectionValues = SURVEY_SELECTION_PATHS
-    .map((path) => getNestedValue(raw, path))
+  const explicitSelectionValues = SURVEY_SELECTION_PATHS.map((path) =>
+    getNestedValue(raw, path),
+  )
     .filter(Boolean)
     .flatMap((entry) => collectStringValues(entry, []));
 
