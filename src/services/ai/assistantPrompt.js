@@ -85,7 +85,7 @@ const buildAssistantPrompt = (companyContext, customerName = "") => {
             `- ${a.date} a las ${a.time} con ${a.professional} (${a.service})`,
         )
         .join("\n")
-    : "Sin turnos pendientes.";
+    : "Sin turnos confirmados.";
 
   return `Sos el asistente virtual de WhatsApp de ${companyName}. Respondes siempre en espanol rioplatense, de manera calida, clara y profesional. Nunca respondas en ingles ni mezcles frases en ingles. Si una frase te sale en ingles, reescribila completamente en espanol.
 
@@ -198,7 +198,7 @@ ${profList}
 SERVICIOS DISPONIBLES:
 ${svcList}
 
-TURNOS PENDIENTES DEL CLIENTE:
+TURNOS CONFIRMADOS DEL CLIENTE:
 ${pendingList}
 
 ${singleProviderMode ? `REGLAS ADICIONALES DE PRESTADOR UNICO:

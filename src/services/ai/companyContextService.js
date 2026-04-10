@@ -148,7 +148,7 @@ const getCompanyContextByInstanceName = async (instanceName, customerPhone = nul
       const pending = await prisma.tURNO.findMany({
         where: {
           id_cliente: client.id_cliente,
-          estado: "pendiente",
+          estado: "confirmado",
           fecha_hora: { gte: now },
         },
         include: {
