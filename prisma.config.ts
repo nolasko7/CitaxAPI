@@ -9,7 +9,30 @@ const dbUser = process.env.DB_USER;
 const dbPass = process.env.DB_PASSWORD;
 const dbName = process.env.DB_NAME;
 
-const fallbackUrl = `mysql://${dbUser}:${dbPass}@${dbHost}:${dbPort}/${dbName}?sslaccept=strict`;
+const buildFallbackUrl = () => {
+  if (!dbHost || !dbPort || !dbUser || dbPass === undefined || !dbName) {
+    return process.env["DATABASE_URL"] || "";
+  }
+
+  const encodedUser = encodeURIComponent(dbUser);
+  const encodedPass = encodeURIComponent(dbPass);
+  return `mysql://${encodedUser}:${encodedPass}@${dbHost}:${dbPort}/${dbName}?sslaccept=strict`;
+};
+
+const shouldReplaceDatabaseUrl = (url?: string) => {
+  const normalized = String(url || "").trim().toLowerCase();
+  if (!normalized) return true;
+
+  return (
+    normalized.includes("user:password@host:port") ||
+    normalized.includes("mysql://user:password@host:port/db")
+  );
+};
+
+const fallbackUrl = buildFallbackUrl();
+const datasourceUrl = shouldReplaceDatabaseUrl(process.env["DATABASE_URL"])
+  ? fallbackUrl
+  : process.env["DATABASE_URL"] || fallbackUrl;
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
@@ -17,6 +40,6 @@ export default defineConfig({
     path: "prisma/migrations",
   },
   datasource: {
-    url: process.env["DATABASE_URL"] || fallbackUrl,
+    url: datasourceUrl,
   },
 });

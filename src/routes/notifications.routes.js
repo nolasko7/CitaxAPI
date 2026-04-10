@@ -8,6 +8,7 @@ const { parseTurnoOrigin } = require("../services/turnoSchema.service");
 router.use(authMiddleware);
 
 const readMarkersByCompany = new Map();
+const transientNotificationErrorLogByCode = new Map();
 
 const NOTIFICATION_TYPES = {
   BOOKING_CANCELLED: "booking_cancelled",
@@ -27,6 +28,32 @@ const normalizeAfterId = (value) => {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return parsed;
+};
+
+const isTransientDbNetworkError = (error) =>
+  ["ETIMEDOUT", "ENETUNREACH", "ECONNRESET", "EPIPE", "PROTOCOL_CONNECTION_LOST"].includes(
+    String(error?.code || "").toUpperCase(),
+  );
+
+const logNotificationsError = (error, companyId) => {
+  if (!isTransientDbNetworkError(error)) {
+    console.error("Error al obtener notificaciones:", error);
+    return;
+  }
+
+  const errorCode = String(error?.code || "UNKNOWN").toUpperCase();
+  const cacheKey = `${companyId || "unknown"}:${errorCode}`;
+  const now = Date.now();
+  const lastLoggedAt = transientNotificationErrorLogByCode.get(cacheKey) || 0;
+
+  if (now - lastLoggedAt < 60000) {
+    return;
+  }
+
+  transientNotificationErrorLogByCode.set(cacheKey, now);
+  console.error(
+    `Error al obtener notificaciones [${errorCode}] para empresa ${companyId || "unknown"}: fallo transitorio de red/DB.`,
+  );
 };
 
 const mapTurnoToNotification = (row) => {
@@ -71,8 +98,9 @@ const mapTurnoToNotification = (row) => {
 };
 
 router.get("/", async (req, res) => {
+  const companyId = req.user.id_empresa;
+
   try {
-    const companyId = req.user.id_empresa;
     const limit = normalizeLimit(req.query.limit, 20, 120);
     const afterId = normalizeAfterId(req.query.afterId);
     const includeOrigin = await hasTurnoOrigenColumn();
@@ -133,8 +161,11 @@ router.get("/", async (req, res) => {
       unreadCount: Number(unreadRow?.total || 0),
     });
   } catch (err) {
-    console.error("Error al obtener notificaciones:", err);
-    res.status(500).json({ error: "Error al obtener notificaciones" });
+    logNotificationsError(err, companyId);
+    res.status(isTransientDbNetworkError(err) ? 503 : 500).json({
+      error: "Error al obtener notificaciones",
+      code: isTransientDbNetworkError(err) ? "notifications_temporarily_unavailable" : "notifications_fetch_failed",
+    });
   }
 });
 
