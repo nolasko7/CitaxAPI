@@ -1408,26 +1408,39 @@ const createTools = ({
           String(trustedContactName || "").trim() ||
           String(clientName || "").trim();
 
-        const appointment = await createAppointmentFromAssistant({
-          companyId: companyContext.companyId,
-          professionalId,
-          clientName: resolvedClientName,
-          clientPhone: customerPhone,
-          serviceId: serviceId || null,
-          date,
-          time,
-          referenceDate: companyContext.currentDate,
-        });
-        return JSON.stringify({
-          appointment: {
-            ...appointment,
-            humanDate: formatNaturalDate({
-              date: appointment.date,
-              referenceDate: companyContext.currentDate,
-              timezone: companyContext.timezone,
-            }),
-          },
-        });
+        try {
+          const appointment = await createAppointmentFromAssistant({
+            companyId: companyContext.companyId,
+            professionalId,
+            clientName: resolvedClientName,
+            clientPhone: customerPhone,
+            serviceId: serviceId || null,
+            date,
+            time,
+            referenceDate: companyContext.currentDate,
+          });
+          return JSON.stringify({
+            appointment: {
+              ...appointment,
+              humanDate: formatNaturalDate({
+                date: appointment.date,
+                referenceDate: companyContext.currentDate,
+                timezone: companyContext.timezone,
+              }),
+            },
+          });
+        } catch (err) {
+          console.error("❌ create_appointment falló:", {
+            professionalId,
+            date,
+            time,
+            serviceId,
+            clientName: resolvedClientName,
+            error: err.message,
+          });
+          // Relanzar para que el LLM reciba el error y explique al usuario
+          throw err;
+        }
       },
       {
         name: "create_appointment",

@@ -60,11 +60,22 @@ const getNowInTimezone = (timezone = DEFAULT_TIMEZONE) => {
   );
 };
 
-const isSlotStillBookable = ({ slotEnd, now = getNowInTimezone() }) => {
+// Minutos mínimos de anticipación para poder reservar un turno
+const MIN_BOOKING_LEAD_MINUTES = Number(
+  process.env.MIN_BOOKING_LEAD_MINUTES || "20",
+);
+
+const isSlotStillBookable = ({ slotStart, slotEnd, now = getNowInTimezone() }) => {
   if (!(slotEnd instanceof Date) || Number.isNaN(slotEnd.getTime()))
     return false;
   if (!(now instanceof Date) || Number.isNaN(now.getTime())) return false;
-  return slotEnd > now;
+  // El fin debe ser posterior a ahora (slot no pasado)
+  if (slotEnd <= now) return false;
+  // El inicio debe estar a al menos MIN_BOOKING_LEAD_MINUTES en el futuro
+  const leadMs = MIN_BOOKING_LEAD_MINUTES * 60 * 1000;
+  if (slotStart instanceof Date && slotStart.getTime() - now.getTime() < leadMs)
+    return false;
+  return true;
 };
 
 const pad = (v) => String(v).padStart(2, "0");
@@ -387,7 +398,7 @@ const listAvailableSlots = async ({
             return overlaps(slotStart, slotEnd, tStart, tEnd);
           });
 
-          if (!isBusy && isSlotStillBookable({ slotEnd })) {
+          if (!isBusy && isSlotStillBookable({ slotStart, slotEnd })) {
             slots.push({
               professionalId: prestador.id_prestador,
               professionalName: `${prestador.USUARIO.nombre} ${prestador.USUARIO.apellido}`,
@@ -539,6 +550,15 @@ const createAppointmentFromAssistant = async ({
   // y Prisma guarde 14:30 tal cual, sin sumarle las 3 horas de offset.
   const fechaHora = new Date(`${normalizedDate}T${normalizedTime}:00Z`);
 
+  // Validar anticipación mínima (MIN_BOOKING_LEAD_MINUTES, default 20 min)
+  const nowForValidation = getNowInTimezone();
+  const leadMs = MIN_BOOKING_LEAD_MINUTES * 60 * 1000;
+  if (fechaHora.getTime() - nowForValidation.getTime() < leadMs) {
+    throw new Error(
+      `No se puede reservar el turno de las ${normalizedTime} porque falta menos de ${MIN_BOOKING_LEAD_MINUTES} minutos. Usa find_available_slots para ofrecer horarios disponibles con la anticipación suficiente.`,
+    );
+  }
+
   const endTime = new Date(fechaHora.getTime() + duration * 60000);
   const existing = await prisma.tURNO.findFirst({
     where: {
@@ -566,7 +586,8 @@ const createAppointmentFromAssistant = async ({
       id_prestador: professionalId,
       id_servicio: resolvedServiceId,
       fecha_hora: fechaHora,
-      estado: "pendiente",
+      estado: "confirmado",
+      origen: "whatsapp",
     },
   });
 

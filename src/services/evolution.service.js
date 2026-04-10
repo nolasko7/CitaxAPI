@@ -1,4 +1,4 @@
-﻿const axios = require("axios");
+const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 const {
@@ -1365,17 +1365,69 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
     return;
   }
 
-  for (const message of messages) {
-    const normalized = normalizeIncomingMessage(
-      instanceName,
-      message,
-      webhookData,
-    );
-    storeRecentMessage(instanceName, normalized);
+  // Umbral máximo de antigüedad: 5 minutos
+  const MAX_MESSAGE_AGE_MS = 5 * 60 * 1000;
+  const nowMs = Date.now();
 
+  // ── Fase 1: normalizar y filtrar por antigüedad ────────────────────────────
+  const freshMessages = [];
+  for (const message of messages) {
+    const normalized = normalizeIncomingMessage(instanceName, message, webhookData);
+    const msgTimestampMs = Number(normalized.timestamp) > 1e10
+      ? Number(normalized.timestamp)         // ya en ms
+      : Number(normalized.timestamp) * 1000; // viene en segundos (formato WA)
+    if (nowMs - msgTimestampMs > MAX_MESSAGE_AGE_MS) {
+      verboseLog(
+        `⏭️ Ignorado: mensaje viejo (${Math.round((nowMs - msgTimestampMs) / 1000)}s) | from=${maskPhoneForLog(normalized.phoneNumber)}`,
+      );
+      continue;
+    }
+    storeRecentMessage(instanceName, normalized);
+    freshMessages.push(normalized);
+  }
+
+  if (!freshMessages.length) return;
+
+  // ── Fase 2: agrupar mensajes entrantes del mismo número en un solo mensaje ─
+  // Esto evita que una ráfaga de mensajes (ej.: reconexión del backend) genere
+  // múltiples llamadas al gate y a la LLM. Los mensajes fromMe/grupo se dejan
+  // pasar individualmente para que el mute del operador siga funcionando.
+  const nonInboundMessages = freshMessages.filter(
+    (m) => m.isGroup || m.fromMe || !m.phoneNumber,
+  );
+  const inboundByPhone = new Map();
+  for (const normalized of freshMessages.filter(
+    (m) => !m.isGroup && !m.fromMe && m.phoneNumber,
+  )) {
+    const bucket = inboundByPhone.get(normalized.phoneNumber) || [];
+    bucket.push(normalized);
+    inboundByPhone.set(normalized.phoneNumber, bucket);
+  }
+
+  const mergedInbound = [];
+  for (const [phone, bucket] of inboundByPhone.entries()) {
+    if (bucket.length === 1) {
+      mergedInbound.push(bucket[0]);
+    } else {
+      const merged = mergeBufferedIncomingMessages(bucket);
+      if (merged) {
+        console.log(
+          `🔀 Ráfaga agrupada | from=${maskPhoneForLog(phone)} | count=${bucket.length} | "${compactText(merged.text)}"`,
+        );
+        mergedInbound.push(merged);
+      }
+    }
+  }
+
+  // fromMe/group primero para que los mutes queden establecidos antes de
+  // procesar los mensajes entrantes del mismo payload.
+  const processedMessages = [...nonInboundMessages, ...mergedInbound];
+
+  for (const normalized of processedMessages) {
     console.log(
       `📩 IN | from=${maskPhoneForLog(normalized.phoneNumber)} | type=${normalized.rawType || normalized.messageType} | "${compactText(normalized.text)}"`,
     );
+
 
     appendConversationLog({
       event: "incoming",
@@ -1503,16 +1555,18 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
     }
 
     if (activeGateState?.status === "needs_survey") {
+      // Reservar el gate de forma síncrona ANTES del await para evitar
+      // que webhooks concurrentes del mismo usuario envíen múltiples polls.
+      whatsappConversationGate.set(gateKey, {
+        status: "pending",
+        askedAt: now,
+        updatedAt: now,
+      });
       try {
         const pollResult = await sendPollMessage(
           normalized.phoneNumber,
           instanceName,
         );
-        whatsappConversationGate.set(gateKey, {
-          status: "pending",
-          askedAt: now,
-          updatedAt: now,
-        });
         console.log(
           `📊 Encuesta | to=${maskPhoneForLog(normalized.phoneNumber)} | provider=${pollResult?.provider || "unknown"}`,
         );
@@ -1521,6 +1575,7 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
           "❌ No se pudo enviar encuesta reiniciada:",
           error.message,
         );
+        whatsappConversationGate.delete(gateKey);
       }
       continue;
     }
@@ -1552,6 +1607,8 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
         activeGateState?.pendingBufferedText || "",
       ).trim();
 
+      // Si el usuario ya había pre-confirmado "sí" con el poll y ahora manda texto
+      // con el detalle del turno, tomarlo como confirmación definitiva.
       if (activeGateState?.preconfirmedYesAt && !isPollPayload && currentText) {
         decision = "yes";
         normalized.text = `Si ${[bufferedText, currentText]
@@ -1560,13 +1617,14 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
           .trim()}`;
       }
 
-      if (!decision && !isPollPayload && currentText) {
-        const mergedPendingText = [bufferedText, currentText]
-          .filter(Boolean)
-          .join(" ")
-          .trim();
-
-        if (!bufferedText) {
+      // Mientras se espera respuesta al poll: SIEMPRE bufferizar texto, nunca clasificar.
+      // Esto garantiza que mensajes en ráfaga se acumulan y el poll sólo se envía una vez.
+      if (!decision && !isPollPayload && !activeGateState?.preconfirmedYesAt) {
+        if (currentText) {
+          const mergedPendingText = [bufferedText, currentText]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
           whatsappConversationGate.set(gateKey, {
             ...activeGateState,
             status: "pending",
@@ -1574,39 +1632,10 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
             updatedAt: now,
           });
           verboseLog(
-            `⏸️ Encuesta pendiente | texto guardado from=${maskPhoneForLog(normalized.phoneNumber)}`,
+            `⏸️ Texto bufferizado (esperando poll) | from=${maskPhoneForLog(normalized.phoneNumber)} | acumulado="${compactText(mergedPendingText)}"`,
           );
-          continue;
         }
-
-        try {
-          const { __testables } = require("./ai/geminiService");
-          const isTurnoIntent =
-            await __testables.isAppointmentRelatedInteraction({
-              incomingText: mergedPendingText,
-              history: [],
-              lastAssistantReply: "",
-              surveyQuestion:
-                "¿Cómo te puedo ayudar con tus turnos? Opciones: Sacar un turno, Cancelar un turno, Cambiar un turno, No quiero",
-            });
-          decision = isTurnoIntent ? "yes" : "no";
-          verboseLog(
-            `🧭 Encuesta inferida | from=${maskPhoneForLog(normalized.phoneNumber)} | decision=${decision}`,
-          );
-          if (decision === "yes") {
-            normalized.text = `Si ${mergedPendingText}`;
-          }
-        } catch (error) {
-          console.warn(
-            "⚠️ No se pudo inferir decision en encuesta pendiente:",
-            {
-              instanceName,
-              from: normalized.phoneNumber,
-              message: error.message,
-            },
-          );
-          decision = "no";
-        }
+        continue;
       }
 
       if (!decision && isPollPayload) {
@@ -1681,26 +1710,33 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
       }
     }
 
+
     if (!activeGateState) {
+      // Reservar el gate de forma síncrona ANTES del await para evitar que
+      // webhooks concurrentes del mismo usuario (ráfaga de reconexión) vean el
+      // gate como null y envíen múltiples polls. El texto del mensaje se
+      // bufferiza ahora; los mensajes adicionales del mismo usuario que lleguen
+      // mientras se envía el poll los recibirá el bloque "pending" y los sumará.
+      const firstBufferedText = hasProcessableText(normalized.text)
+        ? String(normalized.text || "").trim()
+        : "";
+      whatsappConversationGate.set(gateKey, {
+        status: "pending",
+        askedAt: now,
+        updatedAt: now,
+        pendingBufferedText: firstBufferedText,
+      });
       try {
         const pollResult = await sendPollMessage(
           normalized.phoneNumber,
           instanceName,
         );
-        const firstBufferedText = hasProcessableText(normalized.text)
-          ? String(normalized.text || "").trim()
-          : "";
-        whatsappConversationGate.set(gateKey, {
-          status: "pending",
-          askedAt: now,
-          updatedAt: now,
-          pendingBufferedText: firstBufferedText,
-        });
         console.log(
           `📊 Encuesta | to=${maskPhoneForLog(normalized.phoneNumber)} | provider=${pollResult?.provider || "unknown"}`,
         );
       } catch (error) {
         console.error("❌ No se pudo enviar encuesta inicial:", error.message);
+        whatsappConversationGate.delete(gateKey);
       }
       continue;
     }
