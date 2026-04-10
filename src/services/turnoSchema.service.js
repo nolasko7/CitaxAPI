@@ -35,10 +35,42 @@ const hasTurnoOrigenColumn = async (executor = pool) => {
   }
 };
 
+const ORIGIN_REASON_SEPARATOR = "|";
+
+const parseTurnoOrigin = (value) => {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) {
+    return {
+      raw: "",
+      origin: "",
+      reason: "",
+    };
+  }
+
+  const [origin = "", reason = ""] = raw
+    .split(ORIGIN_REASON_SEPARATOR)
+    .map((part) => String(part || "").trim().toLowerCase());
+
+  return {
+    raw,
+    origin,
+    reason,
+  };
+};
+
+const buildTurnoOrigin = ({ origin, reason }) => {
+  const normalizedOrigin = String(origin || "").trim().toLowerCase();
+  const normalizedReason = String(reason || "").trim().toLowerCase();
+
+  if (!normalizedOrigin) return "";
+  if (!normalizedReason) return normalizedOrigin;
+  return `${normalizedOrigin}${ORIGIN_REASON_SEPARATOR}${normalizedReason}`;
+};
+
 const inferAppointmentOrigin = ({ origen, estado }) => {
-  const normalizedOrigin = String(origen || "").trim().toLowerCase();
-  if (normalizedOrigin) {
-    return normalizedOrigin;
+  const parsedOrigin = parseTurnoOrigin(origen);
+  if (parsedOrigin.origin) {
+    return parsedOrigin.origin;
   }
 
   const normalizedStatus = String(estado || "").trim().toLowerCase();
@@ -50,6 +82,8 @@ const inferAppointmentOrigin = ({ origen, estado }) => {
 };
 
 module.exports = {
+  buildTurnoOrigin,
   hasTurnoOrigenColumn,
   inferAppointmentOrigin,
+  parseTurnoOrigin,
 };

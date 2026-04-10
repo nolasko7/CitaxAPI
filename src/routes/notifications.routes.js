@@ -3,10 +3,18 @@ const router = express.Router();
 const pool = require("../config/db");
 const authMiddleware = require("../middlewares/auth.middleware");
 const { hasTurnoOrigenColumn } = require("../services/turnoSchema.service");
+const { parseTurnoOrigin } = require("../services/turnoSchema.service");
 
 router.use(authMiddleware);
 
 const readMarkersByCompany = new Map();
+
+const NOTIFICATION_TYPES = {
+  BOOKING_CANCELLED: "booking_cancelled",
+  BOOKING_CONFIRMED: "booking_confirmed",
+  MANUAL_BOOKING: "manual_booking",
+  MANUAL_CONFIRMED_CANCELLATION: "manual_confirmed_cancellation",
+};
 
 const normalizeLimit = (value, fallback = 20, max = 120) => {
   const parsed = Number.parseInt(value, 10);
@@ -23,11 +31,22 @@ const normalizeAfterId = (value) => {
 
 const mapTurnoToNotification = (row) => {
   const estado = String(row.estado || "").toLowerCase();
-  const origen = String(row.turno_origen || "").toLowerCase();
+  const parsedOrigin = parseTurnoOrigin(row.turno_origen);
+  const origen = parsedOrigin.origin;
+  const reason = parsedOrigin.reason;
 
   if (estado === "cancelado") {
+    if (reason === "manual_confirmed_cancellation") {
+      return {
+        type: NOTIFICATION_TYPES.MANUAL_CONFIRMED_CANCELLATION,
+        title: "Cancelacion manual",
+        description: `Se cancelo manualmente un turno ya confirmado de ${row.cliente_nombre || "cliente"}.`,
+        affectsCalendar: true,
+      };
+    }
+
     return {
-      type: "booking_cancelled",
+      type: NOTIFICATION_TYPES.BOOKING_CANCELLED,
       title: "Reserva cancelada",
       description: `${row.cliente_nombre || "Cliente"} cancelo ${row.servicio_nombre || "el turno"}.`,
       affectsCalendar: true,
@@ -36,7 +55,7 @@ const mapTurnoToNotification = (row) => {
 
   if (origen === "manual") {
     return {
-      type: "manual_booking",
+      type: NOTIFICATION_TYPES.MANUAL_BOOKING,
       title: "Reserva manual",
       description: `${row.servicio_nombre || "Servicio"} agendado manualmente para ${row.cliente_nombre || "cliente"}.`,
       affectsCalendar: true,
@@ -44,7 +63,7 @@ const mapTurnoToNotification = (row) => {
   }
 
   return {
-    type: "booking_confirmed",
+    type: NOTIFICATION_TYPES.BOOKING_CONFIRMED,
     title: "Nueva reserva",
     description: `${row.cliente_nombre || "Cliente"} reservo ${row.servicio_nombre || "un servicio"}.`,
     affectsCalendar: true,
@@ -147,3 +166,5 @@ router.patch("/read-all", async (req, res) => {
 });
 
 module.exports = router;
+module.exports.mapTurnoToNotification = mapTurnoToNotification;
+module.exports.NOTIFICATION_TYPES = NOTIFICATION_TYPES;

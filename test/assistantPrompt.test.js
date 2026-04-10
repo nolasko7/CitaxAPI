@@ -43,3 +43,12 @@ test("buildAssistantPrompt includes business own phrases as style guidance", () 
   assert.match(prompt, /Para confirmaciones: Cuando confirmes, deci 'de una'\./);
   assert.match(prompt, /Para cierres: Para cerrar, usa 'abrazo grande'\./);
 });
+
+test("buildAssistantPrompt documents how to treat manual confirmed cancellations", () => {
+  const prompt = buildAssistantPrompt({
+    companyName: "Sergio Barber",
+  });
+
+  assert.match(prompt, /manual_confirmed_cancellation/);
+  assert.match(prompt, /No intentes reconfirmarlo ni recrearlo/);
+});
