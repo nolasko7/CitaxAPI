@@ -1374,10 +1374,15 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
   // ── Fase 1: normalizar y filtrar por antigüedad ────────────────────────────
   const freshMessages = [];
   for (const message of messages) {
-    const normalized = normalizeIncomingMessage(instanceName, message, webhookData);
-    const msgTimestampMs = Number(normalized.timestamp) > 1e10
-      ? Number(normalized.timestamp)         // ya en ms
-      : Number(normalized.timestamp) * 1000; // viene en segundos (formato WA)
+    const normalized = normalizeIncomingMessage(
+      instanceName,
+      message,
+      webhookData,
+    );
+    const msgTimestampMs =
+      Number(normalized.timestamp) > 1e10
+        ? Number(normalized.timestamp) // ya en ms
+        : Number(normalized.timestamp) * 1000; // viene en segundos (formato WA)
     if (nowMs - msgTimestampMs > MAX_MESSAGE_AGE_MS) {
       verboseLog(
         `⏭️ Ignorado: mensaje viejo (${Math.round((nowMs - msgTimestampMs) / 1000)}s) | from=${maskPhoneForLog(normalized.phoneNumber)}`,
@@ -1429,7 +1434,6 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
     console.log(
       `📩 IN | from=${maskPhoneForLog(normalized.phoneNumber)} | type=${normalized.rawType || normalized.messageType} | "${compactText(normalized.text)}"`,
     );
-
 
     appendConversationLog({
       event: "incoming",
@@ -1724,7 +1728,6 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
         continue;
       }
     }
-
 
     if (!activeGateState) {
       // Reservar el gate de forma síncrona ANTES del await para evitar que
