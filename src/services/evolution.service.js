@@ -671,7 +671,7 @@ const recentBotOutboundByConversation = new Map();
 const recentBotOutboundMessageIds = new Map();
 const BOT_OUTBOUND_TTL_MS = 2 * 60 * 1000;
 const WHATSAPP_PENDING_SURVEY_TTL_MS =
-  Number(process.env.WHATSAPP_PENDING_SURVEY_TTL_MINUTES || 20) * 60 * 1000;
+  Number(process.env.WHATSAPP_PENDING_SURVEY_TTL_HOURS || 72) * 60 * 60 * 1000;
 const WHATSAPP_OPTED_IN_TTL_MS =
   Number(process.env.WHATSAPP_OPTED_IN_TTL_HOURS || 12) * 60 * 60 * 1000;
 const WHATSAPP_FLOW_INACTIVITY_TTL_MS =
@@ -1305,12 +1305,18 @@ const flushIncomingMessageBatch = async (batchKey) => {
         instanceName,
         phoneNumber: mergedMessage.phoneNumber,
       });
+      // Mute corto (10 min) para que el intercambio de despedida ocurra en silencio.
+      // Cuando el mute expire, el siguiente mensaje del usuario dispara la encuesta.
+      const POST_APPOINTMENT_GRACE_MS = 10 * 60 * 1000;
       whatsappConversationGate.set(gateKey, {
-        status: "needs_survey",
+        status: "muted",
+        muteUntil: Date.now() + POST_APPOINTMENT_GRACE_MS,
         updatedAt: Date.now(),
+        reason: "post_appointment_grace",
+        transitionToNeedsSurveyAfterMute: true,
       });
       console.log(
-        `🔄 Flujo reiniciado | from=${maskPhoneForLog(mergedMessage.phoneNumber)} | reason=appointment_confirmed`,
+        `🔄 Flujo post-turno | from=${maskPhoneForLog(mergedMessage.phoneNumber)} | grace=10min → needs_survey`,
       );
     }
   } catch (error) {
@@ -1539,8 +1545,16 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
       activeGateState?.status === "muted" &&
       activeGateState?.muteUntil <= now
     ) {
-      whatsappConversationGate.delete(gateKey);
-      activeGateState = null;
+      if (activeGateState?.transitionToNeedsSurveyAfterMute) {
+        whatsappConversationGate.set(gateKey, {
+          status: "needs_survey",
+          updatedAt: now,
+        });
+        activeGateState = whatsappConversationGate.get(gateKey);
+      } else {
+        whatsappConversationGate.delete(gateKey);
+        activeGateState = null;
+      }
     }
 
     if (
@@ -1563,6 +1577,7 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
     if (
       activeGateState &&
       activeGateState?.status !== "muted" &&
+      activeGateState?.status !== "pending" &&
       now - Number(activeGateState.updatedAt || 0) >
         WHATSAPP_FLOW_INACTIVITY_TTL_MS
     ) {
