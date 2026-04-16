@@ -427,21 +427,30 @@ const disconnectInstance = async (instanceName) => {
   }
 };
 
-// â”€â”€â”€ Send text message via Evolution API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Send text message via Evolution API ──────────────────────────────
 const sendTextMessage = async (phoneNumber, text, instanceName) => {
   const normalizedInstanceName = normalizeInstanceName(instanceName);
   const number = String(phoneNumber).replace(/[^\d]/g, "");
-  const response = await evolutionClient.post(
-    `/message/sendText/${normalizedInstanceName}`,
-    { number, text },
-  );
-  rememberBotOutboundMessage({
-    instanceName: normalizedInstanceName,
-    phoneNumber: number,
-    text,
-    responseData: response.data,
-  });
-  return response.data;
+  console.log(`📤 sendTextMessage | instance=${normalizedInstanceName} | to=${number} | textLen=${text?.length || 0}`);
+  try {
+    const response = await evolutionClient.post(
+      `/message/sendText/${normalizedInstanceName}`,
+      { number, text },
+    );
+    rememberBotOutboundMessage({
+      instanceName: normalizedInstanceName,
+      phoneNumber: number,
+      text,
+      responseData: response.data,
+    });
+    return response.data;
+  } catch (error) {
+    console.error(`❌ sendTextMessage FAILED | instance=${normalizedInstanceName} | to=${number}`);
+    console.error("  status:", error.response?.status);
+    console.error("  data:", JSON.stringify(error.response?.data || {}, null, 2));
+    console.error("  url:", error.config?.baseURL + error.config?.url);
+    throw error;
+  }
 };
 
 const sendPollMessage = async (phoneNumber, instanceName) => {
@@ -1361,6 +1370,72 @@ const enqueueIncomingMessageForAssistant = ({ instanceName, normalized }) => {
   pendingIncomingMessageBatches.set(batchKey, batch);
 };
 
+const handleOwnerConfirmationCommand = async (instanceName, ownerPhone, turnoId) => {
+  try {
+    const normalizedInstance = normalizeInstanceName(instanceName);
+    
+    // Obtenemos empresa dado la instancia
+    const [empresaRows] = await pool.execute(
+      `SELECT e.id_empresa, e.nombre_comercial 
+       FROM EMPRESA e
+       JOIN CONFIG_WHATSAPP cw ON cw.id_empresa = e.id_empresa
+       WHERE cw.instance_name = ?
+       LIMIT 1`,
+      [normalizedInstance]
+    );
+
+    if (!empresaRows.length) return;
+    const company = empresaRows[0];
+
+    // Obtenemos el turno
+    const [turnoRows] = await pool.execute(
+      `SELECT t.id_turno, t.estado, t.fecha_hora, 
+              c.whatsapp_id, c.nombre_wa, 
+              s.nombre AS servicio_nombre
+       FROM TURNO t
+       JOIN CLIENTE c ON c.id_cliente = t.id_cliente
+       JOIN SERVICIO s ON s.id_servicio = t.id_servicio
+       WHERE t.id_turno = ? AND c.id_empresa = ?
+       LIMIT 1`,
+      [turnoId, company.id_empresa]
+    );
+
+    if (!turnoRows.length) {
+      await sendTextMessage(ownerPhone, `❌ No se encontró el turno #${turnoId} para tu empresa.`, normalizedInstance);
+      return;
+    }
+
+    const turno = turnoRows[0];
+    if (turno.estado === 'confirmado') {
+      await sendTextMessage(ownerPhone, `⚠️ El turno #${turnoId} ya se encontraba confirmado.`, normalizedInstance);
+      return;
+    }
+    
+    if (turno.estado !== 'pendiente_confirmacion' && turno.estado !== 'pendiente') {
+      await sendTextMessage(ownerPhone, `⚠️ No se puede confirmar el turno #${turnoId} porque su estado actual es '${turno.estado}'.`, normalizedInstance);
+      return;
+    }
+
+    // Actualizamos estado
+    await pool.execute('UPDATE TURNO SET estado = ? WHERE id_turno = ?', ['confirmado', turnoId]);
+
+    // Notificamos al dueño
+    await sendTextMessage(ownerPhone, `✅ Turno #${turnoId} confirmado exitosamente. Se notificará al cliente.`, normalizedInstance);
+
+    // Notificamos al cliente
+    if (turno.whatsapp_id) {
+      const fechaOptions = { weekday: 'long', day: 'numeric', month: 'long' };
+      const fechaStr = new Date(turno.fecha_hora).toLocaleDateString('es-AR', fechaOptions);
+      const horaStr = new Date(turno.fecha_hora).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      const clientMessage = `Hola ${turno.nombre_wa || ''}! 👋\n\nTe confirmamos que tu turno para *${turno.servicio_nombre}* el día *${fechaStr}* a las *${horaStr}* ha sido confirmado por ${company.nombre_comercial}.\n\n¡Te esperamos!`;
+      
+      await sendTextMessage(turno.whatsapp_id, clientMessage, normalizedInstance);
+    }
+  } catch (error) {
+    console.error("Error confirmando turno por WA:", error.message);
+  }
+};
+
 // â”€â”€â”€ Process incoming messages (AI pipeline) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const processIncomingMessage = async ({ instanceName, webhookData }) => {
   const messages = extractIncomingMessages(webhookData);
@@ -1518,6 +1593,16 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
         phoneNumber: normalized.phoneNumber,
       })
     ) {
+      const text = String(normalized.text || "").trim();
+      const match = text.match(/^confirmar(?:\s+turno)?\s+#?(\d+)$/i);
+      
+      if (match) {
+        const turnoId = parseInt(match[1], 10);
+        verboseLog(`📞 Comando de confirmación WA | owner=${normalized.phoneNumber} | turno=${turnoId}`);
+        await handleOwnerConfirmationCommand(instanceName, normalized.phoneNumber, turnoId);
+        continue;
+      }
+
       verboseLog(
         `⏭️ Ignorado interno | from=${maskPhoneForLog(normalized.phoneNumber)}`,
       );

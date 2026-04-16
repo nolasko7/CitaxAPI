@@ -159,6 +159,7 @@ const buildWhatsappNotification = ({
   professionalName,
   date,
   time,
+  turnoId,
 }) => {
   const lines = [
     `Nueva solicitud de turno en ${companyName}.`,
@@ -173,6 +174,7 @@ const buildWhatsappNotification = ({
     "",
     "Estado: pendiente de confirmacion.",
     "Confirma el turno desde Citax antes de bloquear la agenda.",
+    `👉 Para confirmar este turno responda a este mensaje con: Confirmar ${turnoId}`,
   ];
 
   return lines.join("\n");
@@ -501,6 +503,7 @@ router.post("/landing/:slug/appointments", async (req, res) => {
     let notificationError = "";
 
     if (company.instance_name && company.whatsapp_number) {
+      console.log(`🔔 [NUEVO] Enviando notificacion WA | instance=${company.instance_name} | to=${company.whatsapp_number} | turnoId=${turnoResult.insertId}`);
       try {
         await sendTextMessage(
           company.whatsapp_number,
@@ -513,13 +516,18 @@ router.post("/landing/:slug/appointments", async (req, res) => {
             professionalName: `${professionalRows[0].nombre || ""} ${professionalRows[0].apellido || ""}`.trim(),
             date,
             time,
+            turnoId: turnoResult.insertId,
           }),
           company.instance_name
         );
         notificationSent = true;
       } catch (error) {
         notificationError = error.response?.data?.message || error.message;
-        console.error("Error notificando solicitud publica por WhatsApp:", notificationError);
+        console.error("❌ Error notificando solicitud publica por WhatsApp:");
+        console.error("- Message:", notificationError);
+        console.error("- Response Data:", JSON.stringify(error.response?.data || {}, null, 2));
+        console.error("- Request Config URL:", error.config?.url);
+        console.error("- Request Config Data:", error.config?.data);
       }
     }
 
