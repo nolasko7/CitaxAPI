@@ -457,6 +457,7 @@ const findOrCreateClient = async ({ companyId, clientName, clientPhone }) => {
     where: {
       id_empresa: companyId,
       whatsapp_id: { contains: normalizedPhone.slice(-8) },
+      NOT: { whatsapp_id: { startsWith: "manual-" } },
     },
   });
 
