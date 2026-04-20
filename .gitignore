@@ -4,3 +4,4 @@ node_modules
 test_prisma.js
 update_db.js
 debug_out.txt
+src/logs/whatsapp_conversations

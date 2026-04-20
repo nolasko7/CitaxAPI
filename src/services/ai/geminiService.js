@@ -1919,7 +1919,98 @@ const runWhatsappAssistant = async ({
       .split(":")[0]
       .replace(/[^\d]/g, "")
       .trim();
-  const messageText = String(incomingMessage?.text || "").trim();
+  let messageText = String(incomingMessage?.text || "").trim();
+  const supportMenuSelection = (() => {
+    const raw = incomingMessage?.raw || {};
+
+    const collectValuesByKeyRegex = (obj, keyRegex, bucket = []) => {
+      if (!obj || typeof obj !== "object") return bucket;
+
+      for (const [key, value] of Object.entries(obj)) {
+        if (keyRegex.test(key)) {
+          bucket.push(value);
+        }
+        if (Array.isArray(value)) {
+          value.forEach((entry) => collectValuesByKeyRegex(entry, keyRegex, bucket));
+        } else if (value && typeof value === "object") {
+          collectValuesByKeyRegex(value, keyRegex, bucket);
+        }
+      }
+
+      return bucket;
+    };
+
+    const flattenedSelectionValues = collectValuesByKeyRegex(
+      raw,
+      /(selectedOptions?|selectedOptionName|optionName|option)/i,
+      [],
+    )
+      .flatMap((entry) => (Array.isArray(entry) ? entry : [entry]))
+      .filter((entry) => entry !== undefined && entry !== null);
+
+    const selectedTextValues = flattenedSelectionValues
+      .flatMap((entry) => {
+        if (typeof entry === "string") return entry;
+        if (Array.isArray(entry)) return entry;
+        if (entry && typeof entry === "object") {
+          const selected = entry.selectedOptions || entry.options || [];
+          if (Array.isArray(selected)) return selected;
+        }
+        return [];
+      })
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean);
+
+    const normalizedSelectedText = selectedTextValues.map((value) =>
+      value.toLowerCase(),
+    );
+
+    if (normalizedSelectedText.some((value) => value.includes("ver turnos"))) {
+      return "Quiero ver turnos de un dia.";
+    }
+    if (normalizedSelectedText.some((value) => value.includes("cancelar"))) {
+      return "Quiero cancelar un turno.";
+    }
+    if (
+      normalizedSelectedText.some(
+        (value) => value.includes("mover") || value.includes("reprogram"),
+      )
+    ) {
+      return "Quiero mover o reprogramar un turno.";
+    }
+    if (normalizedSelectedText.some((value) => value.includes("agendar"))) {
+      return "Quiero agendar un turno.";
+    }
+
+    const selectionNumbers = flattenedSelectionValues
+      .map((entry) => (typeof entry === "number" ? entry : Number(entry)))
+      .filter((value) => Number.isInteger(value));
+
+    if (/poll/i.test(String(incomingMessage?.rawType || incomingMessage?.messageType || ""))) {
+      console.log("🧪 Support menu poll debug", {
+        from: customerPhone,
+        rawType: incomingMessage?.rawType || incomingMessage?.messageType,
+        rawText: String(incomingMessage?.text || ""),
+        flattenedSelectionValues,
+        selectedTextValues,
+        selectionNumbers,
+        rawSample: JSON.stringify(raw || {}).slice(0, 800),
+      });
+    }
+
+    if (selectionNumbers.includes(0)) return "Quiero ver turnos de un dia.";
+    if (selectionNumbers.includes(1)) return "Quiero cancelar un turno.";
+    if (selectionNumbers.includes(2)) {
+      return "Quiero mover o reprogramar un turno.";
+    }
+    if (selectionNumbers.includes(3)) return "Quiero agendar un turno.";
+
+    return "";
+  })();
+
+  if (supportMenuSelection) {
+    messageText = supportMenuSelection;
+  }
 
   if (!messageText) {
     return {
@@ -2139,7 +2230,78 @@ const runSupportAssistant = async ({ incomingMessage }) => {
       .split(":")[0]
       .replace(/[^\d]/g, "")
       .trim();
-  const messageText = String(incomingMessage?.text || "").trim();
+  let messageText = String(incomingMessage?.text || "").trim();
+  const supportMenuSelection = (() => {
+    const raw = incomingMessage?.raw || {};
+
+    const collectValuesByKeyRegex = (obj, keyRegex, bucket = []) => {
+      if (!obj || typeof obj !== "object") return bucket;
+
+      for (const [key, value] of Object.entries(obj)) {
+        if (keyRegex.test(key)) {
+          bucket.push(value);
+        }
+        if (Array.isArray(value)) {
+          value.forEach((entry) => collectValuesByKeyRegex(entry, keyRegex, bucket));
+        } else if (value && typeof value === "object") {
+          collectValuesByKeyRegex(value, keyRegex, bucket);
+        }
+      }
+
+      return bucket;
+    };
+
+    const flattenedSelectionValues = collectValuesByKeyRegex(
+      raw,
+      /(selectedOptions?|selectedOptionName|optionName|option)/i,
+      [],
+    )
+      .flatMap((entry) => (Array.isArray(entry) ? entry : [entry]))
+      .filter((entry) => entry !== undefined && entry !== null);
+
+    const selectedTextValues = flattenedSelectionValues
+      .filter((entry) => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+
+    const normalizedSelectedText = selectedTextValues.map((value) =>
+      value.toLowerCase(),
+    );
+
+    if (normalizedSelectedText.some((value) => value.includes("ver turnos"))) {
+      return "Quiero ver turnos de un dia.";
+    }
+    if (normalizedSelectedText.some((value) => value.includes("cancelar"))) {
+      return "Quiero cancelar un turno.";
+    }
+    if (
+      normalizedSelectedText.some(
+        (value) => value.includes("mover") || value.includes("reprogram"),
+      )
+    ) {
+      return "Quiero mover o reprogramar un turno.";
+    }
+    if (normalizedSelectedText.some((value) => value.includes("agendar"))) {
+      return "Quiero agendar un turno.";
+    }
+
+    const selectionNumbers = flattenedSelectionValues
+      .map((entry) => (typeof entry === "number" ? entry : Number(entry)))
+      .filter((value) => Number.isInteger(value));
+
+    if (selectionNumbers.includes(0)) return "Quiero ver turnos de un dia.";
+    if (selectionNumbers.includes(1)) return "Quiero cancelar un turno.";
+    if (selectionNumbers.includes(2)) {
+      return "Quiero mover o reprogramar un turno.";
+    }
+    if (selectionNumbers.includes(3)) return "Quiero agendar un turno.";
+
+    return "";
+  })();
+
+  if (supportMenuSelection) {
+    messageText = supportMenuSelection;
+  }
   if (!customerPhone || !messageText) {
     return { enabled: false, reason: "Mensaje sin contenido." };
   }
@@ -2185,10 +2347,12 @@ const runSupportAssistant = async ({ incomingMessage }) => {
       ? `Hay exactamente un solo prestador activo en esta empresa: ${supportCompanyContext.professionals[0].name} (ID ${supportCompanyContext.professionals[0].id}). Si te piden agendar un turno, NO preguntes con que profesional. Asumi ese prestador automaticamente para buscar disponibilidad y para crear el turno.`
       : "Si hay mas de un prestador activo y el cliente no especifico cual quiere, ahi si pedi o inferi el prestador correcto antes de crear el turno.";
   const supportPrompt = `Sos el bot de soporte de Citax por WhatsApp.
-Si la conversaciÃƒÆ’Ã‚Â³n no tiene empresa autenticada, pedÃƒÆ’Ã‚Â­ email y contraseÃƒÆ’Ã‚Â±a de forma clara.
+Solo usa encuestas/polls para enviar el menu de opciones despues del login.
+Si la conversacion no tiene empresa autenticada, pedi email y contrasena de forma clara y no ofrezcas acciones hasta loguear.
 Cuando tengas email y contraseÃƒÆ’Ã‚Â±a, ejecutÃƒÆ’Ã‚Â¡ la tool login_empresa.
 No digas que el login fue exitoso sin ejecutar la tool.
-DespuÃƒÆ’Ã‚Â©s del login, podÃƒÆ’Ã‚Â©s ayudar con: agendar turno, cancelar turno y ver agenda del dÃƒÆ’Ã‚Â­a usando tools.
+Despues del login, no listes opciones en texto. Indica que vas a enviar una encuesta con el menu.
+Si piden mover/reprogramar, primero identifica y cancela el turno y luego crea el nuevo.
 ${singleSupportProviderRule}
 Si vas a agendar un turno para un cliente de la empresa, con el nombre del cliente alcanza para crear el turno.
 Solo pedÃƒÆ’Ã‚Â­ telefono del cliente si realmente hace falta como dato adicional o si la empresa quiere dejarlo asociado.
@@ -2202,6 +2366,20 @@ Empresa autenticada actual: ${supportState.companyName || "ninguna"}.
 ${supportProfessionalsRef}
 ${buildTemporalReferenceText(realtimeContext)}`;
 
+  if (supportState.companyId && supportState.companyName) {
+    const pollIntentKeywords = /\b(menu|opciones|ayuda|hola|buen|buenas|inicio|start)\b/i;
+    const isMenuRequest =
+      pollIntentKeywords.test(messageText) ||
+      messageText === "Quiero ver turnos de un dia." ||
+      messageText === "Quiero cancelar un turno." ||
+      messageText === "Quiero mover o reprogramar un turno." ||
+      messageText === "Quiero agendar un turno.";
+
+    if (isMenuRequest && !supportMenuSelection) {
+      return { enabled: false, poll: { type: "support_menu" } };
+    }
+  }
+
   const { result, provider } = await invokeGeminiGraph({
     tools,
     messages: [
@@ -2212,8 +2390,14 @@ ${buildTemporalReferenceText(realtimeContext)}`;
   });
 
   const { reply } = extractAssistantReplyFromMessages(result.messages);
+  const usedTools = extractCurrentTurnToolNames({
+    messages: result.messages,
+    incomingText: messageText,
+  });
 
-  if (!reply) return { enabled: false, reason: "Sin respuesta generada." };
+  if (!reply && !usedTools.includes("login_empresa")) {
+    return { enabled: false, reason: "Sin respuesta generada." };
+  }
 
   if (supportState.companyId && supportState.companyName) {
     await setSupportSession({
@@ -2222,6 +2406,15 @@ ${buildTemporalReferenceText(realtimeContext)}`;
       companyName: supportState.companyName,
       userEmail: persistedSession?.userEmail || "",
     });
+  }
+
+  if (usedTools.includes("login_empresa")) {
+    setConversationHistory({
+      instanceName: SUPPORT_INSTANCE_NAME,
+      customerPhone,
+      messages: result.messages,
+    });
+    return { enabled: false, poll: { type: "support_menu" } };
   }
 
   setConversationHistory({

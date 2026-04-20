@@ -513,6 +513,7 @@ router.post("/landing/:slug/appointments", async (req, res) => {
           phoneNumber: company.whatsapp_number,
           instanceName: SUPPORT_INSTANCE_NAME,
           turnoId: turnoResult.insertId,
+          companyId: company.id_empresa,
           notificationText: buildWhatsappNotification({
             companyName: company.nombre_comercial,
             clientName,

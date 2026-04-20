@@ -453,6 +453,55 @@ const sendTextMessage = async (phoneNumber, text, instanceName) => {
   }
 };
 
+const buildOutboundPhoneCandidates = ({ phoneNumber, referencePhone }) => {
+  const raw = normalizeWhatsappPhone(phoneNumber);
+  if (!raw) return [];
+
+  const candidates = new Set([raw]);
+  const reference = normalizeWhatsappPhone(referencePhone);
+
+  if (reference) {
+    const wants549 = reference.startsWith("549");
+    const wants54 = reference.startsWith("54");
+
+    if (wants549 || wants54) {
+      if (!raw.startsWith("54")) {
+        candidates.add(`54${raw}`);
+      }
+      if (!raw.startsWith("549")) {
+        candidates.add(`549${raw}`);
+      }
+    }
+  }
+
+  return [...candidates];
+};
+
+const sendTextMessageWithFallback = async ({
+  phoneNumber,
+  referencePhone,
+  text,
+  instanceName,
+}) => {
+  const candidates = buildOutboundPhoneCandidates({
+    phoneNumber,
+    referencePhone,
+  });
+  let lastError = null;
+
+  for (const candidate of candidates) {
+    try {
+      await sendTextMessage(candidate, text, instanceName);
+      return { sent: true, candidate };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastError) throw lastError;
+  return { sent: false, candidate: "" };
+};
+
 const sendPollMessage = async (phoneNumber, instanceName) => {
   const normalizedInstanceName = normalizeInstanceName(instanceName);
   const number = String(phoneNumber).replace(/[^\d]/g, "");
@@ -512,6 +561,63 @@ const sendPollMessage = async (phoneNumber, instanceName) => {
   };
 };
 
+const sendSupportMenuPoll = async (phoneNumber, instanceName) => {
+  const normalizedInstanceName = normalizeInstanceName(instanceName);
+  const number = String(phoneNumber).replace(/[^\d]/g, "");
+
+  const pollName = "Que necesitas hacer?";
+  const options = [
+    "📅 Ver turnos de un dia",
+    "❌ Cancelar un turno",
+    "🔄 Mover/Reprogramar un turno",
+    "📝 Agendar un turno",
+  ];
+
+  const payloadCandidates = [
+    {
+      number,
+      name: pollName,
+      selectableCount: 1,
+      values: options,
+    },
+    {
+      number,
+      title: pollName,
+      options,
+      selectableCount: 1,
+    },
+  ];
+
+  let lastError = null;
+
+  for (const payload of payloadCandidates) {
+    try {
+      const response = await evolutionClient.post(
+        `/message/sendPoll/${normalizedInstanceName}`,
+        payload,
+      );
+      return { sent: true, provider: "poll", data: response.data };
+    } catch (error) {
+      lastError = error;
+      console.warn("⚠️ Falló envío poll soporte, intento siguiente:", {
+        instanceName: normalizedInstanceName,
+        number,
+        status: error.response?.status || null,
+        message: error.message,
+      });
+    }
+  }
+
+  const fallbackText =
+    "Que necesitas hacer? Respondé: Ver turnos / Cancelar / Mover o reprogramar / Agendar";
+  await sendTextMessage(number, fallbackText, normalizedInstanceName);
+  return {
+    sent: true,
+    provider: "text-fallback",
+    fallbackReason: lastError?.message || null,
+  };
+};
+
 // ─── Pending poll confirmations tracking ──────────────────────────────
 const pendingPollConfirmations = new Map();
 
@@ -523,6 +629,7 @@ const sendAppointmentConfirmationPoll = async ({
   instanceName,
   turnoId,
   notificationText,
+  companyId,
 }) => {
   const normalizedInstanceName = normalizeInstanceName(instanceName);
   const number = String(phoneNumber).replace(/[^\d]/g, "");
@@ -566,6 +673,7 @@ const sendAppointmentConfirmationPoll = async ({
     turnoId,
     phoneNumber: number,
     instanceName: normalizedInstanceName,
+    companyId: companyId || null,
     pollName,
     createdAt: Date.now(),
   });
@@ -590,34 +698,62 @@ const sendAppointmentConfirmationPoll = async ({
 const resolveAppointmentPollResponse = (normalized) => {
   const raw = normalized?.raw || {};
 
-  // Self-contained string collector to avoid dependency on functions defined later
-  const collectAllStrings = (obj, bucket = []) => {
-    if (!obj || typeof obj !== "object") {
-      if (typeof obj === "string" && obj.trim()) bucket.push(obj.trim());
-      return bucket;
+  // Self-contained collectors to avoid dependency on functions defined later
+  const collectValuesByKeyRegex = (obj, keyRegex, bucket = []) => {
+    if (!obj || typeof obj !== "object") return bucket;
+
+    for (const [key, value] of Object.entries(obj)) {
+      if (keyRegex.test(key)) {
+        bucket.push(value);
+      }
+      if (Array.isArray(value)) {
+        value.forEach((entry) => collectValuesByKeyRegex(entry, keyRegex, bucket));
+      } else if (value && typeof value === "object") {
+        collectValuesByKeyRegex(value, keyRegex, bucket);
+      }
     }
-    if (Array.isArray(obj)) {
-      obj.forEach((item) => collectAllStrings(item, bucket));
-      return bucket;
-    }
-    Object.values(obj).forEach((val) => collectAllStrings(val, bucket));
+
     return bucket;
   };
 
-  // Collect all strings from the raw message data
-  const allStrings = collectAllStrings(raw);
-  const normalizedStrings = allStrings.map((v) => v.toLowerCase());
+  const flattenedSelectionValues = collectValuesByKeyRegex(
+    raw,
+    /(selectedOptions?|selectedOptionName|optionName|option)/i,
+    [],
+  )
+    .flatMap((entry) => (Array.isArray(entry) ? entry : [entry]))
+    .filter((entry) => entry !== undefined && entry !== null);
 
-  const isConfirm = normalizedStrings.some((v) =>
-    v.includes("confirmar turno")
+  const selectedTextValues = flattenedSelectionValues
+    .filter((entry) => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  const normalizedSelectedText = selectedTextValues.map((value) =>
+    value.toLowerCase(),
   );
-  const isReject = normalizedStrings.some((v) =>
-    v.includes("rechazar turno")
+
+  const isReject = normalizedSelectedText.some((value) =>
+    value.includes("rechazar turno"),
+  );
+  const isConfirm = normalizedSelectedText.some((value) =>
+    value.includes("confirmar turno"),
   );
 
-  if (!isConfirm && !isReject) return null;
+  if (isReject) return { action: "reject" };
+  if (isConfirm) return { action: "confirm" };
 
-  return { action: isConfirm ? "confirm" : "reject" };
+  const selectionNumbers = flattenedSelectionValues
+    .map((entry) => (typeof entry === "number" ? entry : Number(entry)))
+    .filter((value) => Number.isInteger(value));
+
+  if (selectionNumbers.includes(0) && selectionNumbers.includes(1)) {
+    return null;
+  }
+  if (selectionNumbers.includes(0)) return { action: "confirm" };
+  if (selectionNumbers.includes(1)) return { action: "reject" };
+
+  return null;
 };
 
 const handleAppointmentPollConfirmation = async (instanceName, normalized) => {
@@ -650,7 +786,12 @@ const handleAppointmentPollConfirmation = async (instanceName, normalized) => {
   const turnoId = matchedEntry.turnoId;
 
   if (pollResponse.action === "confirm") {
-    await handleOwnerConfirmationCommand(instanceName, ownerPhone, turnoId);
+    await handleOwnerConfirmationCommand(
+      instanceName,
+      ownerPhone,
+      turnoId,
+      matchedEntry.companyId,
+    );
   } else {
     // Reject
     try {
@@ -660,6 +801,42 @@ const handleAppointmentPollConfirmation = async (instanceName, normalized) => {
         `❌ Turno #${turnoId} rechazado. El turno fue cancelado.`,
         normalizedInstanceName
       );
+      const [rows] = await pool.execute(
+        `SELECT t.fecha_hora, c.whatsapp_id, c.nombre_wa, s.nombre AS servicio_nombre,
+                e.nombre_comercial, cw.whatsapp_number
+         FROM TURNO t
+         JOIN CLIENTE c ON c.id_cliente = t.id_cliente
+         JOIN SERVICIO s ON s.id_servicio = t.id_servicio
+         JOIN EMPRESA e ON e.id_empresa = c.id_empresa
+         LEFT JOIN CONFIG_WHATSAPP cw ON cw.id_empresa = e.id_empresa
+         WHERE t.id_turno = ?
+         LIMIT 1`,
+        [turnoId],
+      );
+
+      const turno = rows[0];
+      if (turno?.whatsapp_id) {
+        const fechaOptions = { weekday: "long", day: "numeric", month: "long" };
+        const fechaStr = new Date(turno.fecha_hora).toLocaleDateString(
+          "es-AR",
+          fechaOptions,
+        );
+        const horaStr = new Date(turno.fecha_hora).toLocaleTimeString("es-AR", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        const clientMessage = `Hola ${turno.nombre_wa || ""}! 👋\n\nTu turno para *${turno.servicio_nombre}* el día *${fechaStr}* a las *${horaStr}* fue rechazado por ${turno.nombre_comercial}.\n\nSi querés, podés solicitar otro turno desde la web o por WhatsApp.`;
+        const companyInstanceName = matchedEntry.companyId
+          ? buildInstanceName({ companyId: matchedEntry.companyId })
+          : normalizedInstanceName;
+
+        await sendTextMessageWithFallback({
+          phoneNumber: turno.whatsapp_id,
+          referencePhone: turno.whatsapp_number || ownerPhone,
+          text: clientMessage,
+          instanceName: companyInstanceName,
+        });
+      }
     } catch (error) {
       console.error("Error rechazando turno:", error.message);
     }
@@ -1436,7 +1613,21 @@ const flushIncomingMessageBatch = async (batchKey) => {
       text: aiResponse?.text || "",
     });
 
-    if (aiResponse?.enabled && aiResponse?.text) {
+    if (aiResponse?.poll?.type === "support_menu") {
+      const pollResult = await sendSupportMenuPoll(
+        mergedMessage.phoneNumber,
+        instanceName,
+      );
+      console.log(
+        `📊 Encuesta soporte | to=${maskPhoneForLog(mergedMessage.phoneNumber)} | provider=${pollResult?.provider || "unknown"}`,
+      );
+      appendConversationLog({
+        event: "outbound_sent",
+        instanceName,
+        phone: mergedMessage.phoneNumber,
+        text: "[support_menu_poll]",
+      });
+    } else if (aiResponse?.enabled && aiResponse?.text) {
       await sendTextMessage(
         mergedMessage.phoneNumber,
         aiResponse.text,
@@ -1526,19 +1717,34 @@ const enqueueIncomingMessageForAssistant = ({ instanceName, normalized }) => {
   pendingIncomingMessageBatches.set(batchKey, batch);
 };
 
-const handleOwnerConfirmationCommand = async (instanceName, ownerPhone, turnoId) => {
+const handleOwnerConfirmationCommand = async (
+  instanceName,
+  ownerPhone,
+  turnoId,
+  companyId = null,
+) => {
   try {
-    const normalizedInstance = normalizeInstanceName(instanceName);
-    
-    // Obtenemos empresa dado la instancia
-    const [empresaRows] = await pool.execute(
-      `SELECT e.id_empresa, e.nombre_comercial 
-       FROM EMPRESA e
-       JOIN CONFIG_WHATSAPP cw ON cw.id_empresa = e.id_empresa
-       WHERE cw.instance_name = ?
-       LIMIT 1`,
-      [normalizedInstance]
-    );
+    const ownerInstanceName = normalizeInstanceName(instanceName);
+    const companyInstanceName = companyId
+      ? buildInstanceName({ companyId })
+      : ownerInstanceName;
+
+    const [empresaRows] = companyId
+      ? await pool.execute(
+          `SELECT id_empresa, nombre_comercial
+           FROM EMPRESA
+           WHERE id_empresa = ?
+           LIMIT 1`,
+          [companyId],
+        )
+      : await pool.execute(
+          `SELECT e.id_empresa, e.nombre_comercial 
+           FROM EMPRESA e
+           JOIN CONFIG_WHATSAPP cw ON cw.id_empresa = e.id_empresa
+           WHERE cw.instance_name = ?
+           LIMIT 1`,
+          [ownerInstanceName],
+        );
 
     if (!empresaRows.length) return;
     const company = empresaRows[0];
@@ -1557,18 +1763,30 @@ const handleOwnerConfirmationCommand = async (instanceName, ownerPhone, turnoId)
     );
 
     if (!turnoRows.length) {
-      await sendTextMessage(ownerPhone, `❌ No se encontró el turno #${turnoId} para tu empresa.`, normalizedInstance);
+      await sendTextMessage(
+        ownerPhone,
+        `❌ No se encontró el turno #${turnoId} para tu empresa.`,
+        ownerInstanceName,
+      );
       return;
     }
 
     const turno = turnoRows[0];
     if (turno.estado === 'confirmado') {
-      await sendTextMessage(ownerPhone, `⚠️ El turno #${turnoId} ya se encontraba confirmado.`, normalizedInstance);
+      await sendTextMessage(
+        ownerPhone,
+        `⚠️ El turno #${turnoId} ya se encontraba confirmado.`,
+        ownerInstanceName,
+      );
       return;
     }
     
     if (turno.estado !== 'pendiente_confirmacion' && turno.estado !== 'pendiente') {
-      await sendTextMessage(ownerPhone, `⚠️ No se puede confirmar el turno #${turnoId} porque su estado actual es '${turno.estado}'.`, normalizedInstance);
+      await sendTextMessage(
+        ownerPhone,
+        `⚠️ No se puede confirmar el turno #${turnoId} porque su estado actual es '${turno.estado}'.`,
+        ownerInstanceName,
+      );
       return;
     }
 
@@ -1576,7 +1794,11 @@ const handleOwnerConfirmationCommand = async (instanceName, ownerPhone, turnoId)
     await pool.execute('UPDATE TURNO SET estado = ? WHERE id_turno = ?', ['confirmado', turnoId]);
 
     // Notificamos al dueño
-    await sendTextMessage(ownerPhone, `✅ Turno #${turnoId} confirmado exitosamente. Se notificará al cliente.`, normalizedInstance);
+    await sendTextMessage(
+      ownerPhone,
+      `✅ Turno #${turnoId} confirmado exitosamente. Se notificará al cliente.`,
+      ownerInstanceName,
+    );
 
     // Notificamos al cliente
     if (turno.whatsapp_id) {
@@ -1584,8 +1806,13 @@ const handleOwnerConfirmationCommand = async (instanceName, ownerPhone, turnoId)
       const fechaStr = new Date(turno.fecha_hora).toLocaleDateString('es-AR', fechaOptions);
       const horaStr = new Date(turno.fecha_hora).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
       const clientMessage = `Hola ${turno.nombre_wa || ''}! 👋\n\nTe confirmamos que tu turno para *${turno.servicio_nombre}* el día *${fechaStr}* a las *${horaStr}* ha sido confirmado por ${company.nombre_comercial}.\n\n¡Te esperamos!`;
-      
-      await sendTextMessage(turno.whatsapp_id, clientMessage, normalizedInstance);
+
+      await sendTextMessageWithFallback({
+        phoneNumber: turno.whatsapp_id,
+        referencePhone: company.whatsapp_number || ownerPhone,
+        text: clientMessage,
+        instanceName: companyInstanceName,
+      });
     }
   } catch (error) {
     console.error("Error confirmando turno por WA:", error.message);
@@ -1748,6 +1975,19 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
       continue;
     }
 
+    if (
+      normalizeInstanceName(instanceName) !==
+        normalizeInstanceName(SUPPORT_INSTANCE_NAME) &&
+      getConfiguredSupportPhones().has(
+        normalizeWhatsappPhone(normalized.phoneNumber),
+      )
+    ) {
+      verboseLog(
+        `⏭️ Ignorado soporte -> empresa | from=${maskPhoneForLog(normalized.phoneNumber)}`,
+      );
+      continue;
+    }
+
     if (ignoredPhones.has(normalized.phoneNumber)) {
       verboseLog(
         `⏭️ Ignorado blacklist | from=${maskPhoneForLog(normalized.phoneNumber)}`,
@@ -1782,6 +2022,68 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
       connectionState?.instance?.state || connectionState?.state || "unknown";
     if (staticStatus !== "open") {
       verboseLog(`⏭️ Instancia no abierta | state=${staticStatus}`);
+      continue;
+    }
+
+    const isSupportInstance =
+      normalizeInstanceName(instanceName) ===
+      normalizeInstanceName(SUPPORT_INSTANCE_NAME);
+
+    if (isSupportInstance) {
+      if (normalized.isAudio) {
+        verboseLog("🎙️ Procesando audio...");
+        const transcript = await processAudioMessage(
+          instanceName,
+          normalized.messageId,
+        );
+        normalized.text = transcript;
+      }
+
+      const isPollPayload = /poll/i.test(
+        String(normalized.rawType || normalized.messageType || ""),
+      );
+      if (!hasProcessableText(normalized.text) && isPollPayload) {
+        const collectValuesByKeyRegex = (obj, keyRegex, bucket = []) => {
+          if (!obj || typeof obj !== "object") return bucket;
+          for (const [key, value] of Object.entries(obj)) {
+            if (keyRegex.test(key)) {
+              bucket.push(value);
+            }
+            if (Array.isArray(value)) {
+              value.forEach((entry) =>
+                collectValuesByKeyRegex(entry, keyRegex, bucket),
+              );
+            } else if (value && typeof value === "object") {
+              collectValuesByKeyRegex(value, keyRegex, bucket);
+            }
+          }
+          return bucket;
+        };
+        const flattenedSelectionValues = collectValuesByKeyRegex(
+          normalized.raw || {},
+          /(selectedOptions?|selectedOptionName|optionName|option|vote)/i,
+          [],
+        )
+          .flatMap((entry) => (Array.isArray(entry) ? entry : [entry]))
+          .filter((entry) => entry !== undefined && entry !== null);
+        console.log("🧪 Support poll raw", {
+          from: normalized.phoneNumber,
+          rawType: normalized.rawType || normalized.messageType,
+          messageId: normalized.messageId,
+          flattenedSelectionValues,
+          sample: JSON.stringify(normalized.raw || {}).slice(0, 800),
+        });
+        normalized.text = "poll_update";
+      }
+
+      if (!hasProcessableText(normalized.text)) {
+        verboseLog(
+          `⏭️ Sin contenido procesable | from=${maskPhoneForLog(normalized.phoneNumber)} | type=${normalized.rawType || normalized.messageType}`,
+        );
+        continue;
+      }
+
+      enqueueIncomingMessageForAssistant({ instanceName, normalized });
       continue;
     }
 
