@@ -1990,22 +1990,6 @@ const runWhatsappAssistant = async ({
       .map((entry) => (typeof entry === "number" ? entry : Number(entry)))
       .filter((value) => Number.isInteger(value));
 
-    if (
-      /poll/i.test(
-        String(incomingMessage?.rawType || incomingMessage?.messageType || ""),
-      )
-    ) {
-      console.log("🧪 Support menu poll debug", {
-        from: customerPhone,
-        rawType: incomingMessage?.rawType || incomingMessage?.messageType,
-        rawText: String(incomingMessage?.text || ""),
-        flattenedSelectionValues,
-        selectedTextValues,
-        selectionNumbers,
-        rawSample: JSON.stringify(raw || {}).slice(0, 800),
-      });
-    }
-
     if (selectionNumbers.includes(0)) return "Quiero ver turnos de un dia.";
     if (selectionNumbers.includes(1)) return "Quiero cancelar un turno.";
     if (selectionNumbers.includes(2)) {

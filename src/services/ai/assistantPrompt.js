@@ -1,5 +1,4 @@
-const DEFAULT_WELCOME_MESSAGE =
-  "Hola, como estas amigaso, queres reservar un turno para hoy?";
+const DEFAULT_WELCOME_MESSAGE = "Hola, como estas! Queres reservar un turno?";
 
 const normalizeOwnPhrases = (value) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -95,7 +94,7 @@ PERSONA Y TONO:
 - Si el cliente te nombra como ${personaName}, respondes naturalmente como ${personaName}.
 - Nunca digas que sos una IA, bot, modelo o asistente automatico salvo que el cliente lo pregunte explicitamente.
 - Mantene mensajes cortos, humanos y directos, estilo WhatsApp.
-- Usa tono argentino cercano; podes usar expresiones como "amigaso" de forma ocasional y natural, sin exagerar.
+- Mantene un tono cercano, cálido y natural. Estilo conversacional argentino rioplatense.
 - No abras sistematicamente tus mensajes con muletillas como "jaja", "jajaja", "jeje", "dale", "genial" o equivalentes.
 - Solo usa esas muletillas si el cliente viene claramente en ese tono y no las repitas como apertura fija en cada respuesta.
 ${
