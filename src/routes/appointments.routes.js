@@ -163,6 +163,16 @@ router.post('/', async (req, res) => {
         await connection.beginTransaction();
         const empresaId = req.user.id_empresa;
 
+        // Validate blocked dates
+        const [blockedRows] = await connection.execute(
+            'SELECT id FROM BLOCKED_DATES WHERE id_empresa = ? AND fecha = ? AND (id_prestador = ? OR id_prestador IS NULL)',
+            [empresaId, fecha, prestador_id]
+        );
+
+        if (blockedRows.length > 0) {
+            return res.status(400).json({ error: 'El negocio no trabaja ese día.' });
+        }
+
         // Upsert CLIENTE
         const [checkRows] = await connection.execute(
             'SELECT id_cliente FROM CLIENTE WHERE id_empresa = ? AND whatsapp_id = ?',

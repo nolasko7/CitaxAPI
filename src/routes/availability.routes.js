@@ -292,4 +292,107 @@ router.get('/', async (req, res) => {
     }
 });
 
+router.get('/blocked-dates', async (req, res) => {
+    try {
+        const companyId = req.user.id_empresa;
+        const prestadorId = req.query.prestador_id ? Number(req.query.prestador_id) : null;
+
+        let query = 'SELECT fecha, motivo, id_prestador FROM BLOCKED_DATES WHERE id_empresa = ? AND fecha >= CURDATE()';
+        let params = [companyId];
+
+        if (req.user.rol === 'prestador') {
+            query += ' AND (id_prestador = ? OR id_prestador IS NULL)';
+            params.push(req.user.id_prestador);
+        } else if (prestadorId) {
+            query += ' AND (id_prestador = ? OR id_prestador IS NULL)';
+            params.push(prestadorId);
+        }
+
+        const [rows] = await pool.execute(query, params);
+        res.json(rows.map(r => ({
+            fecha: r.fecha instanceof Date ? r.fecha.toISOString().split('T')[0] : r.fecha,
+            motivo: r.motivo,
+            prestador_id: r.id_prestador
+        })));
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Error al obtener fechas bloqueadas' });
+    }
+});
+
+router.post('/blocked-dates', async (req, res) => {
+    const { fecha, motivo, prestador_id } = req.body;
+    if (!fecha) return res.status(400).json({ error: 'Fecha requerida' });
+
+    try {
+        const companyId = req.user.id_empresa;
+        let finalPrestadorId = null;
+
+        if (req.user.rol === 'prestador') {
+            finalPrestadorId = req.user.id_prestador;
+        } else if (prestador_id) {
+            finalPrestadorId = Number(prestador_id);
+        }
+
+        // Check for confirmed appointments
+        let appointmentQuery = `
+            SELECT t.id_turno 
+            FROM TURNO t
+            JOIN CLIENTE c ON t.id_cliente = c.id_cliente
+            WHERE c.id_empresa = ? 
+              AND DATE(t.fecha_hora) = ? 
+              AND t.estado = 'confirmado'
+        `;
+        let appointmentParams = [companyId, fecha];
+        if (finalPrestadorId) {
+            appointmentQuery += ' AND t.id_prestador = ?';
+            appointmentParams.push(finalPrestadorId);
+        }
+        
+        const [appointments] = await pool.execute(appointmentQuery, appointmentParams);
+        if (appointments.length > 0) {
+            return res.status(400).json({ 
+                error: 'No se puede bloquear la fecha porque ya existen turnos confirmados.',
+                appointments_count: appointments.length
+            });
+        }
+
+        await pool.execute(
+            'INSERT INTO BLOCKED_DATES (id_empresa, id_prestador, fecha, motivo) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE motivo = ?',
+            [companyId, finalPrestadorId, fecha, motivo || null, motivo || null]
+        );
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Error al bloquear fecha' });
+    }
+});
+
+router.delete('/blocked-dates/:fecha', async (req, res) => {
+    const { fecha } = req.params;
+    const prestadorId = req.query.prestador_id ? Number(req.query.prestador_id) : null;
+
+    try {
+        const companyId = req.user.id_empresa;
+        let finalPrestadorId = null;
+
+        if (req.user.rol === 'prestador') {
+            finalPrestadorId = req.user.id_prestador;
+        } else if (prestador_id) {
+            finalPrestadorId = prestadorId;
+        }
+
+        const [result] = await pool.execute(
+            'DELETE FROM BLOCKED_DATES WHERE id_empresa = ? AND fecha = ? AND (id_prestador = ? OR (id_prestador IS NULL AND ? IS NULL))',
+            [companyId, fecha, finalPrestadorId, finalPrestadorId]
+        );
+
+        res.json({ success: true, deleted: result.affectedRows > 0 });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Error al desbloquear fecha' });
+    }
+});
+
 module.exports = router;

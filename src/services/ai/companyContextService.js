@@ -340,6 +340,17 @@ const listAvailableSlots = async ({
 
   if (!prestadores.length) return [];
 
+  // Fetch blocked dates for the range
+  const blockedDates = await prisma.bLOCKED_DATES.findMany({
+    where: {
+      id_empresa: companyId,
+      fecha: {
+        gte: new Date(`${normalizedStart}T00:00:00Z`),
+        lte: new Date(`${normalizedEnd}T23:59:59Z`),
+      },
+    },
+  });
+
   const existingTurnos = await prisma.tURNO.findMany({
     where: {
       id_prestador: { in: prestadores.map((p) => p.id_prestador) },
@@ -374,7 +385,23 @@ const listAvailableSlots = async ({
   ) {
     const weekday = toWeekdayNumber(cursor);
 
+    // Skip if the entire date is blocked for the company
+    const isDateBlockedForCompany = blockedDates.some(
+      (bd) =>
+        bd.id_prestador === null &&
+        bd.fecha.toISOString().slice(0, 10) === cursor,
+    );
+    if (isDateBlockedForCompany) continue;
+
     for (const prestador of prestadoresConAgenda) {
+      // Skip if the date is blocked for this specific professional
+      const isDateBlockedForProfessional = blockedDates.some(
+        (bd) =>
+          bd.id_prestador === prestador.id_prestador &&
+          bd.fecha.toISOString().slice(0, 10) === cursor,
+      );
+      if (isDateBlockedForProfessional) continue;
+
       const selectedService = serviceId
         ? prestador.SERVICIOS.find(
             (ps) => Number(ps.SERVICIO.id_servicio) === Number(serviceId),
