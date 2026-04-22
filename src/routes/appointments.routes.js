@@ -141,7 +141,7 @@ router.get('/', async (req, res) => {
             estado: appt.estado,
             origen: inferAppointmentOrigin({ origen: appt.turno_origen, estado: appt.estado }),
             cliente_nombre: appt.nombre_wa || 'Sin nombre',
-            cliente_whatsapp: appt.whatsapp_id,
+            cliente_whatsapp: appt.whatsapp_id.startsWith('manual_') ? '' : (appt.whatsapp_id.includes('_') ? appt.whatsapp_id.split('_')[0] : appt.whatsapp_id),
             cliente_email: appt.cliente_email || '',
             prestador_nombre: appt.prestador_nombre,
             prestador_apellido: appt.prestador_apellido,
@@ -174,19 +174,31 @@ router.post('/', async (req, res) => {
         }
 
         // Upsert CLIENTE
+        let phoneToSearch = cliente_telefono || `manual_${Date.now()}`;
         const [checkRows] = await connection.execute(
-            'SELECT id_cliente FROM CLIENTE WHERE id_empresa = ? AND whatsapp_id = ?',
-            [empresaId, cliente_telefono]
+            'SELECT id_cliente, nombre_wa FROM CLIENTE WHERE id_empresa = ? AND whatsapp_id = ?',
+            [empresaId, phoneToSearch]
         );
 
         let clienteId;
         if (checkRows.length > 0) {
-            clienteId = checkRows[0].id_cliente;
-            await connection.execute('UPDATE CLIENTE SET nombre_wa = ? WHERE id_cliente = ?', [cliente_nombre, clienteId]);
+            const existingName = (checkRows[0].nombre_wa || '').trim().toLowerCase();
+            const newName = (cliente_nombre || '').trim().toLowerCase();
+            
+            if (existingName !== newName) {
+                const fallbackPhone = `${phoneToSearch}_${Date.now()}`;
+                const [insertRes] = await connection.execute(
+                    'INSERT INTO CLIENTE (id_empresa, whatsapp_id, nombre_wa) VALUES (?, ?, ?)',
+                    [empresaId, fallbackPhone, cliente_nombre]
+                );
+                clienteId = insertRes.insertId;
+            } else {
+                clienteId = checkRows[0].id_cliente;
+            }
         } else {
             const [insertRes] = await connection.execute(
                 'INSERT INTO CLIENTE (id_empresa, whatsapp_id, nombre_wa) VALUES (?, ?, ?)',
-                [empresaId, cliente_telefono, cliente_nombre]
+                [empresaId, phoneToSearch, cliente_nombre]
             );
             clienteId = insertRes.insertId;
         }
