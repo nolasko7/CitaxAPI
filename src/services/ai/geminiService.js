@@ -878,11 +878,11 @@ const sanitizeNonReplyOutput = (value) => {
 const hasPollEnvelope = (raw) =>
   Boolean(
     raw?.pollUpdateMessage ||
-      raw?.pollResponseMessage ||
-      raw?.message?.pollUpdateMessage ||
-      raw?.message?.pollResponseMessage ||
-      raw?.data?.pollUpdateMessage ||
-      raw?.data?.pollResponseMessage,
+    raw?.pollResponseMessage ||
+    raw?.message?.pollUpdateMessage ||
+    raw?.message?.pollResponseMessage ||
+    raw?.data?.pollUpdateMessage ||
+    raw?.data?.pollResponseMessage,
   );
 
 const isPollPlaceholderText = (value) => {
