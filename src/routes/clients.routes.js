@@ -98,4 +98,26 @@ router.put('/:id', async (req, res) => {
   }
 });
 
+// DELETE /api/clients/:id — borrar cliente
+router.delete('/:id', async (req, res) => {
+  const clienteId = req.params.id;
+
+  try {
+    const [rows] = await pool.execute(
+      'SELECT id_cliente FROM CLIENTE WHERE id_cliente = ? AND id_empresa = ?',
+      [clienteId, req.user.id_empresa]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Cliente no encontrado' });
+    }
+
+    await pool.execute('DELETE FROM CLIENTE WHERE id_cliente = ?', [clienteId]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al borrar cliente' });
+  }
+});
+
 module.exports = router;
