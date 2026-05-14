@@ -105,7 +105,7 @@ const toWeekdayNumber = (dateStr) => {
   return weekday === 0 ? 7 : weekday;
 };
 
-const combineDateTime = (dateStr, timeStr) => new Date(`${dateStr}T${timeStr}:00Z`);
+const combineDateTime = (dateStr, timeStr) => new Date(`${dateStr}T${timeStr}:00`);
 
 const overlaps = (startA, endA, startB, endB) => startA < endB && startB < endA;
 

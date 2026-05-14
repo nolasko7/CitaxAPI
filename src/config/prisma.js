@@ -15,7 +15,7 @@ const buildFallbackDatabaseUrl = () => {
 
   const encodedUser = encodeURIComponent(dbUser);
   const encodedPass = encodeURIComponent(dbPass);
-  return `mysql://${encodedUser}:${encodedPass}@${dbHost}:${dbPort}/${dbName}?sslaccept=strict`;
+  return `mysql://${encodedUser}:${encodedPass}@${dbHost}:${dbPort}/${dbName}?sslaccept=strict&timezone=-03:00`;
 };
 
 const shouldReplaceDatabaseUrl = (url) => {

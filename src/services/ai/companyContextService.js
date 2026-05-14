@@ -56,7 +56,7 @@ const getNowInTimezone = (timezone = DEFAULT_TIMEZONE) => {
       parts[p.type] = p.value;
     });
   return new Date(
-    `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}Z`,
+    `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`,
   );
 };
 
@@ -90,6 +90,14 @@ const normalizePhone = (v) =>
     .replace(/[^\d]/g, "")
     .trim();
 const normalizeClientName = (v) => String(v || "").trim();
+const formatTimeInTz = (dt, timezone = DEFAULT_TIMEZONE) =>
+  new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(dt);
+const formatTimeFilter = (dt) => formatTimeInTz(dt);
 
 const normalizeDate = (value, referenceDate = new Date()) => {
   if (!value) return null;
@@ -133,7 +141,7 @@ const toWeekdayNumber = (dateStr) => {
   return d === 0 ? 7 : d;
 };
 const combineDateTime = (dateStr, timeStr) =>
-  new Date(`${dateStr}T${timeStr}:00Z`);
+  new Date(`${dateStr}T${timeStr}:00`);
 const overlaps = (s1, e1, s2, e2) => s1 < e2 && s2 < e1;
 
 // â”€â”€â”€ Get company context by instance name â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -202,7 +210,7 @@ const getCompanyContextByInstanceName = async (
     if (client) {
       const now = new Date();
       const todayStr = getCurrentDateInTimeZone();
-      const todayStart = new Date(`${todayStr}T00:00:00Z`);
+      const todayStart = new Date(`${todayStr}T00:00:00`);
 
       const [pending, todayPast] = await Promise.all([
         prisma.tURNO.findMany({
@@ -234,9 +242,7 @@ const getCompanyContextByInstanceName = async (
       const mapTurno = (t, alreadyPassed) => ({
         id: t.id_turno,
         date: t.fecha_hora.toISOString().slice(0, 10),
-        time: formatTime(
-          `${pad(t.fecha_hora.getUTCHours())}:${pad(t.fecha_hora.getUTCMinutes())}`,
-        ),
+        time: formatTimeInTz(t.fecha_hora),
         service: t.SERVICIO.nombre,
         professional: `${t.PRESTADOR.USUARIO.nombre} ${t.PRESTADOR.USUARIO.apellido}`,
         alreadyPassed,
@@ -369,8 +375,8 @@ const listAvailableSlots = async ({
     where: {
       id_empresa: companyId,
       fecha: {
-        gte: new Date(`${normalizedStart}T00:00:00Z`),
-        lte: new Date(`${normalizedEnd}T23:59:59Z`),
+        gte: new Date(`${normalizedStart}T00:00:00`),
+        lte: new Date(`${normalizedEnd}T23:59:59`),
       },
     },
   });
@@ -380,8 +386,8 @@ const listAvailableSlots = async ({
       id_prestador: { in: prestadores.map((p) => p.id_prestador) },
       estado: "confirmado",
       fecha_hora: {
-        gte: new Date(`${normalizedStart}T00:00:00Z`),
-        lte: new Date(`${normalizedEnd}T23:59:59Z`),
+        gte: new Date(`${normalizedStart}T00:00:00`),
+        lte: new Date(`${normalizedEnd}T23:59:59`),
       },
     },
     include: { SERVICIO: true },
@@ -458,8 +464,8 @@ const listAvailableSlots = async ({
               professionalId: prestador.id_prestador,
               professionalName: `${prestador.USUARIO.nombre} ${prestador.USUARIO.apellido}`,
               date: cursor,
-              time: `${pad(slotStart.getUTCHours())}:${pad(slotStart.getUTCMinutes())}`,
-              endTime: `${pad(slotEnd.getUTCHours())}:${pad(slotEnd.getUTCMinutes())}`,
+              time: formatTimeInTz(slotStart),
+              endTime: formatTimeInTz(slotEnd),
               duration,
               scheduleSource: prestador.availability.source,
             });
@@ -603,9 +609,7 @@ const createAppointmentFromAssistant = async ({
   if (!servicio) throw new Error("Servicio no encontrado");
 
   const duration = servicio.duracion_minutos || 30;
-  // Agregamos la "Z" al final para que JS lo tome como UTC puro
-  // y Prisma guarde 14:30 tal cual, sin sumarle las 3 horas de offset.
-  const fechaHora = new Date(`${normalizedDate}T${normalizedTime}:00Z`);
+  const fechaHora = new Date(`${normalizedDate}T${normalizedTime}:00`);
 
   // Validar anticipación mínima (MIN_BOOKING_LEAD_MINUTES, default 20 min)
   const nowForValidation = getNowInTimezone();
@@ -672,7 +676,7 @@ const createAppointmentFromAssistant = async ({
     clientName: client.nombre_wa || clientName,
     date: normalizedDate,
     time: normalizedTime,
-    endTime: `${pad(endTime.getUTCHours())}:${pad(endTime.getUTCMinutes())}`,
+    endTime: formatTimeInTz(endTime),
     companyId,
     professionalId,
     serviceId: resolvedServiceId,
@@ -717,9 +721,10 @@ const cancelAppointmentFromAssistant = async ({
       (a) => a.fecha_hora.toISOString().slice(0, 10) === normalizedDate,
     );
   }
+
   if (normalizedTime) {
     filtered = filtered.filter((a) => {
-      const t = `${pad(a.fecha_hora.getUTCHours())}:${pad(a.fecha_hora.getUTCMinutes())}`;
+      const t = formatTimeFilter(a.fecha_hora);
       return t === normalizedTime;
     });
   }
@@ -733,7 +738,7 @@ const cancelAppointmentFromAssistant = async ({
       appointments: filtered.map((a) => ({
         id: a.id_turno,
         date: a.fecha_hora.toISOString().slice(0, 10),
-        time: `${pad(a.fecha_hora.getUTCHours())}:${pad(a.fecha_hora.getUTCMinutes())}`,
+        time: formatTimeFilter(a.fecha_hora),
       })),
     };
   }
@@ -748,7 +753,7 @@ const cancelAppointmentFromAssistant = async ({
     status: "cancelled",
     appointmentId: appointment.id_turno,
     date: appointment.fecha_hora.toISOString().slice(0, 10),
-    time: `${pad(appointment.fecha_hora.getUTCHours())}:${pad(appointment.fecha_hora.getUTCMinutes())}`,
+    time: formatTimeFilter(appointment.fecha_hora),
   };
 };
 
@@ -758,8 +763,8 @@ const listAppointmentsByDay = async ({ companyId, date, referenceDate }) => {
     normalizeDate(date, referenceDate) || normalizeDate(referenceDate);
   if (!normalizedDate) return [];
 
-  const dayStart = new Date(`${normalizedDate}T00:00:00Z`);
-  const dayEnd = new Date(`${normalizedDate}T23:59:59Z`);
+  const dayStart = new Date(`${normalizedDate}T00:00:00`);
+  const dayEnd = new Date(`${normalizedDate}T23:59:59`);
 
   const turnos = await prisma.tURNO.findMany({
     where: {
@@ -778,9 +783,7 @@ const listAppointmentsByDay = async ({ companyId, date, referenceDate }) => {
   return turnos.map((t) => ({
     appointmentId: t.id_turno,
     date: t.fecha_hora.toISOString().slice(0, 10),
-    time: formatTime(
-      `${pad(t.fecha_hora.getUTCHours())}:${pad(t.fecha_hora.getUTCMinutes())}`,
-    ),
+    time: formatTimeInTz(t.fecha_hora),
     status: t.estado,
     serviceName: t.SERVICIO?.nombre || "Turno",
     professionalName: `${t.PRESTADOR.USUARIO.nombre} ${t.PRESTADOR.USUARIO.apellido}`,
@@ -807,8 +810,8 @@ const cancelAppointmentByCompanyFromAssistant = async ({
 
   if (normalizedDate) {
     where.fecha_hora = {
-      gte: new Date(`${normalizedDate}T00:00:00Z`),
-      lte: new Date(`${normalizedDate}T23:59:59Z`),
+      gte: new Date(`${normalizedDate}T00:00:00`),
+      lte: new Date(`${normalizedDate}T23:59:59`),
     };
   } else {
     where.fecha_hora = { gte: getNowInTimezone() };
@@ -827,7 +830,7 @@ const cancelAppointmentByCompanyFromAssistant = async ({
   let filtered = appointments;
   if (normalizedTime) {
     filtered = filtered.filter((a) => {
-      const t = `${pad(a.fecha_hora.getUTCHours())}:${pad(a.fecha_hora.getUTCMinutes())}`;
+      const t = formatTimeFilter(a.fecha_hora);
       return t === normalizedTime;
     });
   }
@@ -873,7 +876,7 @@ const cancelAppointmentByCompanyFromAssistant = async ({
       appointments: filtered.slice(0, 8).map((a) => ({
         id: a.id_turno,
         date: a.fecha_hora.toISOString().slice(0, 10),
-        time: `${pad(a.fecha_hora.getUTCHours())}:${pad(a.fecha_hora.getUTCMinutes())}`,
+        time: formatTimeFilter(a.fecha_hora),
         professional:
           `${a.PRESTADOR?.USUARIO?.nombre || ""} ${a.PRESTADOR?.USUARIO?.apellido || ""}`.trim(),
         client: a.CLIENTE?.nombre_wa || "Sin nombre",
@@ -891,7 +894,7 @@ const cancelAppointmentByCompanyFromAssistant = async ({
     status: "cancelled",
     appointmentId: appointment.id_turno,
     date: appointment.fecha_hora.toISOString().slice(0, 10),
-    time: `${pad(appointment.fecha_hora.getUTCHours())}:${pad(appointment.fecha_hora.getUTCMinutes())}`,
+    time: formatTimeFilter(appointment.fecha_hora),
     professional:
       `${appointment.PRESTADOR?.USUARIO?.nombre || ""} ${appointment.PRESTADOR?.USUARIO?.apellido || ""}`.trim(),
     client: appointment.CLIENTE?.nombre_wa || "Sin nombre",
