@@ -898,7 +898,7 @@ const handleAppointmentPollConfirmation = async (instanceName, normalized) => {
 
       const turno = rows[0];
       if (turno?.whatsapp_id) {
-        const fechaOptions = { weekday: "long", day: "numeric", month: "long" };
+        const fechaOptions = { weekday: "long", day: "numeric", month: "long", timeZone: "America/Argentina/Buenos_Aires" };
         const fechaStr = new Date(turno.fecha_hora).toLocaleDateString(
           "es-AR",
           fechaOptions,
@@ -906,6 +906,7 @@ const handleAppointmentPollConfirmation = async (instanceName, normalized) => {
         const horaStr = new Date(turno.fecha_hora).toLocaleTimeString("es-AR", {
           hour: "2-digit",
           minute: "2-digit",
+          timeZone: "America/Argentina/Buenos_Aires",
         });
         const clientMessage = `Hola ${turno.nombre_wa || ""}! 👋\n\nTu turno para *${turno.servicio_nombre}* el día *${fechaStr}* a las *${horaStr}* fue rechazado por ${turno.nombre_comercial}.\n\nSi querés, podés solicitar otro turno desde la web o por WhatsApp.`;
         const companyInstanceName = matchedEntry.companyId
@@ -1923,7 +1924,7 @@ const handleOwnerConfirmationCommand = async (
 
     // Notificamos al cliente
     if (turno.whatsapp_id) {
-      const fechaOptions = { weekday: "long", day: "numeric", month: "long" };
+      const fechaOptions = { weekday: "long", day: "numeric", month: "long", timeZone: "America/Argentina/Buenos_Aires" };
       const fechaStr = new Date(turno.fecha_hora).toLocaleDateString(
         "es-AR",
         fechaOptions,
@@ -1931,6 +1932,7 @@ const handleOwnerConfirmationCommand = async (
       const horaStr = new Date(turno.fecha_hora).toLocaleTimeString("es-AR", {
         hour: "2-digit",
         minute: "2-digit",
+        timeZone: "America/Argentina/Buenos_Aires",
       });
       const clientMessage = `Hola ${turno.nombre_wa || ""}! 👋\n\nTe confirmamos que tu turno para *${turno.servicio_nombre}* el día *${fechaStr}* a las *${horaStr}* ha sido confirmado por ${company.nombre_comercial}.\n\n¡Te esperamos!`;
 
@@ -2000,10 +2002,12 @@ const sendAppointmentInfoMessage = async ({ instanceName, phoneNumber }) => {
           weekday: 'long',
           day: 'numeric',
           month: 'long',
+          timeZone: 'America/Argentina/Buenos_Aires',
         });
         const hora = new Date(row.fecha_hora).toLocaleTimeString('es-AR', {
           hour: '2-digit',
           minute: '2-digit',
+          timeZone: 'America/Argentina/Buenos_Aires',
         });
         const estadoEmoji =
           row.estado === 'confirmado'

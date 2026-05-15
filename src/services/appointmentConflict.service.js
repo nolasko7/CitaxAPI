@@ -4,6 +4,9 @@ const {
   addMinutes,
   rangesOverlap,
 } = require("../utils/appointmentOccupancy");
+const {
+  toComparableAppointmentDate,
+} = require("../utils/appointmentDateInterop");
 
 const buildDayBounds = (start, end = start) => {
   const dayStart = new Date(start);
@@ -44,7 +47,7 @@ const findOverlappingAppointmentWithPrisma = async ({
 
   return (
     candidates.find((appointment) => {
-      const appointmentStart = new Date(appointment.fecha_hora);
+      const appointmentStart = toComparableAppointmentDate(appointment);
       const appointmentEnd = addMinutes(
         appointmentStart,
         appointment.SERVICIO?.duracion_minutos ||

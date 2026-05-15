@@ -59,7 +59,10 @@ const isValidTime = (value) => {
   return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
 };
 
-const buildAppointmentDateTime = (date, time) => `${date} ${time}:00`;
+const buildAppointmentDateTime = (date, time) => {
+  const localDate = new Date(`${date}T${time}:00`);
+  return localDate.toISOString().slice(0, 19).replace('T', ' ');
+};
 
 const findCompanyBySlug = async (slug) => {
   const [rows] = await pool.execute(

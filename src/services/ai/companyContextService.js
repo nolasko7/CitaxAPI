@@ -20,6 +20,11 @@ const {
 const {
   findOverlappingAppointmentWithPrisma,
 } = require("../appointmentConflict.service");
+const {
+  formatStoredDateKey,
+  formatStoredTimeKey,
+  toComparableAppointmentDate,
+} = require("../../utils/appointmentDateInterop");
 
 const DEFAULT_TIMEZONE = getRuntimeTimeZone();
 
@@ -112,7 +117,18 @@ const formatTimeInTz = (dt, timezone = DEFAULT_TIMEZONE) =>
     minute: "2-digit",
     hour12: false,
   }).format(dt);
-const formatTimeFilter = (dt) => formatTimeInTz(dt);
+const formatStoredDate = (appointmentLike, timezone = DEFAULT_TIMEZONE) =>
+  formatStoredDateKey({
+    fecha_hora: appointmentLike?.fecha_hora,
+    origen: appointmentLike?.origen,
+    timezone,
+  });
+const formatStoredTime = (appointmentLike, timezone = DEFAULT_TIMEZONE) =>
+  formatStoredTimeKey({
+    fecha_hora: appointmentLike?.fecha_hora,
+    origen: appointmentLike?.origen,
+    timezone,
+  });
 
 const normalizeDate = (value, referenceDate = new Date()) => {
   if (!value) return null;
@@ -222,41 +238,48 @@ const getCompanyContextByInstanceName = async (
     });
 
     if (client) {
-      const now = new Date();
       const todayStr = getCurrentDateInTimeZone();
-      const todayStart = new Date(`${todayStr}T00:00:00`);
+      const now = new Date();
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+      const confirmedAppointments = await prisma.tURNO.findMany({
+        where: {
+          id_cliente: client.id_cliente,
+          estado: "confirmado",
+        },
+        include: {
+          SERVICIO: true,
+          PRESTADOR: { include: { USUARIO: true } },
+        },
+        orderBy: { fecha_hora: "asc" },
+      });
 
-      const [pending, todayPast] = await Promise.all([
-        prisma.tURNO.findMany({
-          where: {
-            id_cliente: client.id_cliente,
-            estado: "confirmado",
-            fecha_hora: { gte: now },
-          },
-          include: {
-            SERVICIO: true,
-            PRESTADOR: { include: { USUARIO: true } },
-          },
-          orderBy: { fecha_hora: "asc" },
-        }),
-        prisma.tURNO.findMany({
-          where: {
-            id_cliente: client.id_cliente,
-            estado: "confirmado",
-            fecha_hora: { gte: todayStart, lt: now },
-          },
-          include: {
-            SERVICIO: true,
-            PRESTADOR: { include: { USUARIO: true } },
-          },
-          orderBy: { fecha_hora: "asc" },
-        }),
-      ]);
+      const pending = [];
+      const todayPast = [];
+
+      confirmedAppointments.forEach((appointment) => {
+        const comparableDate = toComparableAppointmentDate(appointment);
+        if (!(comparableDate instanceof Date) || Number.isNaN(comparableDate.getTime())) {
+          return;
+        }
+
+        if (comparableDate >= now) {
+          pending.push(appointment);
+          return;
+        }
+
+        if (
+          formatStoredDate(appointment) === todayStr &&
+          comparableDate >= todayStart
+        ) {
+          todayPast.push(appointment);
+        }
+      });
 
       const mapTurno = (t, alreadyPassed) => ({
         id: t.id_turno,
-        date: t.fecha_hora.toISOString().slice(0, 10),
-        time: formatTimeInTz(t.fecha_hora),
+        date: formatStoredDate(t),
+        time: formatStoredTime(t),
         service: t.SERVICIO.nombre,
         professional: `${t.PRESTADOR.USUARIO.nombre} ${t.PRESTADOR.USUARIO.apellido}`,
         alreadyPassed,
@@ -467,7 +490,7 @@ const listAvailableSlots = async ({
 
           const isBusy = existingTurnos.some((t) => {
             if (t.id_prestador !== prestador.id_prestador) return false;
-            const tStart = new Date(t.fecha_hora);
+            const tStart = toComparableAppointmentDate(t);
             const tEnd = addMinutes(
               tStart,
               t.SERVICIO?.duracion_minutos ||
@@ -722,7 +745,6 @@ const cancelAppointmentFromAssistant = async ({
   const where = {
     id_cliente: client.id_cliente,
     estado: { in: ["pendiente", "confirmado"] },
-    fecha_hora: { gte: getNowInTimezone() },
   };
 
   const appointments = await prisma.tURNO.findMany({
@@ -730,16 +752,20 @@ const cancelAppointmentFromAssistant = async ({
     orderBy: { fecha_hora: "asc" },
   });
 
-  let filtered = appointments;
+  const now = new Date();
+  let filtered = appointments.filter((appointment) => {
+    const comparableDate = toComparableAppointmentDate(appointment);
+    return comparableDate instanceof Date && comparableDate >= now;
+  });
   if (normalizedDate) {
     filtered = filtered.filter(
-      (a) => a.fecha_hora.toISOString().slice(0, 10) === normalizedDate,
+      (a) => formatStoredDate(a) === normalizedDate,
     );
   }
 
   if (normalizedTime) {
     filtered = filtered.filter((a) => {
-      const t = formatTimeFilter(a.fecha_hora);
+      const t = formatStoredTime(a);
       return t === normalizedTime;
     });
   }
@@ -752,8 +778,8 @@ const cancelAppointmentFromAssistant = async ({
       status: "multiple_found",
       appointments: filtered.map((a) => ({
         id: a.id_turno,
-        date: a.fecha_hora.toISOString().slice(0, 10),
-        time: formatTimeFilter(a.fecha_hora),
+        date: formatStoredDate(a),
+        time: formatStoredTime(a),
       })),
     };
   }
@@ -767,8 +793,8 @@ const cancelAppointmentFromAssistant = async ({
   return {
     status: "cancelled",
     appointmentId: appointment.id_turno,
-    date: appointment.fecha_hora.toISOString().slice(0, 10),
-    time: formatTimeFilter(appointment.fecha_hora),
+    date: formatStoredDate(appointment),
+    time: formatStoredTime(appointment),
   };
 };
 
@@ -797,8 +823,8 @@ const listAppointmentsByDay = async ({ companyId, date, referenceDate }) => {
 
   return turnos.map((t) => ({
     appointmentId: t.id_turno,
-    date: t.fecha_hora.toISOString().slice(0, 10),
-    time: formatTimeInTz(t.fecha_hora),
+    date: formatStoredDate(t),
+    time: formatStoredTime(t),
     status: t.estado,
     serviceName: t.SERVICIO?.nombre || "Turno",
     professionalName: `${t.PRESTADOR.USUARIO.nombre} ${t.PRESTADOR.USUARIO.apellido}`,
@@ -829,7 +855,7 @@ const cancelAppointmentByCompanyFromAssistant = async ({
       lte: new Date(`${normalizedDate}T23:59:59`),
     };
   } else {
-    where.fecha_hora = { gte: getNowInTimezone() };
+    delete where.fecha_hora;
   }
 
   const appointments = await prisma.tURNO.findMany({
@@ -843,9 +869,16 @@ const cancelAppointmentByCompanyFromAssistant = async ({
   });
 
   let filtered = appointments;
+  if (!normalizedDate) {
+    const now = new Date();
+    filtered = filtered.filter((appointment) => {
+      const comparableDate = toComparableAppointmentDate(appointment);
+      return comparableDate instanceof Date && comparableDate >= now;
+    });
+  }
   if (normalizedTime) {
     filtered = filtered.filter((a) => {
-      const t = formatTimeFilter(a.fecha_hora);
+      const t = formatStoredTime(a);
       return t === normalizedTime;
     });
   }
@@ -890,8 +923,8 @@ const cancelAppointmentByCompanyFromAssistant = async ({
       status: "multiple_found",
       appointments: filtered.slice(0, 8).map((a) => ({
         id: a.id_turno,
-        date: a.fecha_hora.toISOString().slice(0, 10),
-        time: formatTimeFilter(a.fecha_hora),
+        date: formatStoredDate(a),
+        time: formatStoredTime(a),
         professional:
           `${a.PRESTADOR?.USUARIO?.nombre || ""} ${a.PRESTADOR?.USUARIO?.apellido || ""}`.trim(),
         client: a.CLIENTE?.nombre_wa || "Sin nombre",
@@ -908,8 +941,8 @@ const cancelAppointmentByCompanyFromAssistant = async ({
   return {
     status: "cancelled",
     appointmentId: appointment.id_turno,
-    date: appointment.fecha_hora.toISOString().slice(0, 10),
-    time: formatTimeFilter(appointment.fecha_hora),
+    date: formatStoredDate(appointment),
+    time: formatStoredTime(appointment),
     professional:
       `${appointment.PRESTADOR?.USUARIO?.nombre || ""} ${appointment.PRESTADOR?.USUARIO?.apellido || ""}`.trim(),
     client: appointment.CLIENTE?.nombre_wa || "Sin nombre",

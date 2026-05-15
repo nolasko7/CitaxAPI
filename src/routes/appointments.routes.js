@@ -211,7 +211,8 @@ router.post('/', async (req, res) => {
             clienteId = insertRes.insertId;
         }
 
-        const fullDate = `${fecha} ${hora_inicio}:00`;
+        const localDate = new Date(`${fecha}T${hora_inicio}:00`);
+        const fullDate = localDate.toISOString().slice(0, 19).replace('T', ' ');
         const [serviceRows] = await connection.execute(
             'SELECT id_servicio, duracion_minutos FROM SERVICIO WHERE id_servicio = ? LIMIT 1',
             [servicio_id]
