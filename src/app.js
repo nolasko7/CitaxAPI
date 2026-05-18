@@ -83,6 +83,13 @@ app.post(
   require("./controllers/whatsapp.controller").handleWebhook,
 );
 
+// Calendar .ics endpoint: consumed by Google Calendar servers (no browser CORS needed)
+app.use(
+  "/api/calendars",
+  cors({ origin: true }),
+  require("./routes/calendar.routes"),
+);
+
 app.use(cors(corsOptions));
 app.use(express.json({ limit: "5mb" }));
 

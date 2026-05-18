@@ -39,6 +39,7 @@ model EMPRESA {
   horarios_disponibilidad Json?
   config_recordatorios    Json?
   bot_config              Json?
+  calendar_token          String?          @unique @default(uuid()) @db.VarChar(36)
   CLIENTE                 CLIENTE[]
   CONFIG_WHATSAPP         CONFIG_WHATSAPP?
   USUARIO                 USUARIO          @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade, onUpdate: NoAction, map: "fk_empresa_usuario")

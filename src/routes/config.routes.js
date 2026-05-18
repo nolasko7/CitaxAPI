@@ -445,4 +445,38 @@ router.put("/bot", async (req, res) => {
   }
 });
 
+const {
+  getCalendarInfo,
+  regenerateCalendarToken,
+} = require("../services/calendar.service");
+
+router.get("/calendar", async (req, res) => {
+  try {
+    const backendPublicUrl =
+      process.env.BACKEND_PUBLIC_URL || "http://localhost:3000";
+    const info = await getCalendarInfo(req.user.id_empresa, backendPublicUrl);
+    res.json(info);
+  } catch (err) {
+    console.error("Error al obtener info del calendario:", err);
+    res
+      .status(500)
+      .json({ error: "Error al obtener informacion del calendario" });
+  }
+});
+
+router.post("/calendar/regenerate", async (req, res) => {
+  try {
+    const newToken = await regenerateCalendarToken(req.user.id_empresa);
+    const backendPublicUrl =
+      process.env.BACKEND_PUBLIC_URL || "http://localhost:3000";
+    const info = await getCalendarInfo(req.user.id_empresa, backendPublicUrl);
+    res.json({ message: "Token regenerado exitosamente", ...info });
+  } catch (err) {
+    console.error("Error al regenerar token de calendario:", err);
+    res
+      .status(500)
+      .json({ error: "Error al regenerar token de calendario" });
+  }
+});
+
 module.exports = router;
