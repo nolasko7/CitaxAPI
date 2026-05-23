@@ -10,10 +10,10 @@ const {
 
 const buildDayBounds = (start, end = start) => {
   const dayStart = new Date(start);
-  dayStart.setHours(0, 0, 0, 0);
+  dayStart.setUTCHours(0, 0, 0, 0);
 
   const dayEnd = new Date(end);
-  dayEnd.setHours(23, 59, 59, 999);
+  dayEnd.setUTCHours(23, 59, 59, 999);
 
   return { dayStart, dayEnd };
 };

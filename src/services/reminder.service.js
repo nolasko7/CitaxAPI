@@ -1,9 +1,10 @@
 const pool = require("../config/db");
 const logger = require("../utils/logger");
-const { sendTextMessage } = require("./evolution.service");
+const { sendTextMessageWithFallback } = require("./evolution.service");
+const { parseSqlDateTimeAsUtc } = require("../utils/appointmentDateInterop");
 
-const POLL_INTERVAL_MS = 60_000;
-const WINDOW_SECONDS = 90;
+const POLL_INTERVAL_MS = Number(process.env.REMINDER_POLL_INTERVAL_MS || 60_000);
+const REMINDER_GRACE_SECONDS = Number(process.env.REMINDER_GRACE_SECONDS || 300);
 const LOOKAHEAD_HOURS = 48;
 
 let intervalHandle = null;
@@ -45,13 +46,14 @@ async function processReminders() {
         e.id_empresa,
         e.nombre_comercial AS empresa_nombre,
         e.config_recordatorios,
-        cw.instance_name
+        cw.instance_name,
+        cw.whatsapp_number AS company_whatsapp_number
       FROM TURNO t
       JOIN CLIENTE c ON c.id_cliente = t.id_cliente
       JOIN EMPRESA e ON e.id_empresa = c.id_empresa
       LEFT JOIN CONFIG_WHATSAPP cw ON cw.id_empresa = e.id_empresa
       WHERE t.estado IN ('pendiente', 'pendiente_confirmacion', 'confirmado')
-        AND t.fecha_hora BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL ? HOUR)`,
+        AND t.fecha_hora BETWEEN UTC_TIMESTAMP() AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? HOUR)`,
       [LOOKAHEAD_HOURS],
     );
 
@@ -70,7 +72,25 @@ async function processReminders() {
   }
 }
 
-async function processSingleReminder(row) {
+const getReminderDueState = ({ appointmentDate, offset, now = new Date() }) => {
+  const idealSendTime = new Date(appointmentDate.getTime() - offset * 60_000);
+  const diffMs = now.getTime() - idealSendTime.getTime();
+
+  return {
+    due: diffMs >= 0 && diffMs <= REMINDER_GRACE_SECONDS * 1000,
+    idealSendTime,
+    diffMs,
+  };
+};
+
+async function processSingleReminder(
+  row,
+  {
+    now = new Date(),
+    poolClient = pool,
+    sendMessage = sendTextMessageWithFallback,
+  } = {},
+) {
   if (!row.whatsapp_id || !row.instance_name) return;
   if (!row.config_recordatorios) return;
 
@@ -84,14 +104,22 @@ async function processSingleReminder(row) {
   const offsets = config.recordatorio_offsets_minutos;
   if (!Array.isArray(offsets) || offsets.length === 0) return;
 
-  const appointmentDate = new Date(row.fecha_hora);
-  const now = new Date();
+  const appointmentDate =
+    row.fecha_hora instanceof Date
+      ? new Date(row.fecha_hora.getTime())
+      : parseSqlDateTimeAsUtc(row.fecha_hora);
 
   for (const offset of offsets) {
-    const idealSendTime = new Date(appointmentDate.getTime() - offset * 60_000);
-    const diffMs = idealSendTime.getTime() - now.getTime();
+    const { due } = getReminderDueState({ appointmentDate, offset, now });
 
-    if (Math.abs(diffMs) > WINDOW_SECONDS * 1000) continue;
+    if (!due) continue;
+
+    const [[sentRow]] = await poolClient.execute(
+      "SELECT 1 FROM TURNO_RECORDATORIO WHERE id_turno = ? AND offset_minutos = ? LIMIT 1",
+      [row.id_turno, offset],
+    );
+
+    if (sentRow) continue;
 
     const template =
       config.recordatorio_mensaje?.trim() ||
@@ -104,10 +132,15 @@ async function processSingleReminder(row) {
       empresa_nombre: row.empresa_nombre || "",
     });
 
-    await sendTextMessage(row.whatsapp_id, message, row.instance_name);
+    await sendMessage({
+      phoneNumber: row.whatsapp_id,
+      referencePhone: row.company_whatsapp_number,
+      text: message,
+      instanceName: row.instance_name,
+    });
 
-    const [{ affectedRows }] = await pool.execute(
-      "INSERT IGNORE INTO TURNO_RECORDATORIO (id_turno, offset_minutos, enviado_at) VALUES (?, ?, NOW())",
+    const [{ affectedRows }] = await poolClient.execute(
+      "INSERT IGNORE INTO TURNO_RECORDATORIO (id_turno, offset_minutos, enviado_at) VALUES (?, ?, UTC_TIMESTAMP())",
       [row.id_turno, offset],
     );
 
@@ -137,3 +170,7 @@ function stop() {
 }
 
 module.exports = { start, stop };
+module.exports._private = {
+  getReminderDueState,
+  processSingleReminder,
+};

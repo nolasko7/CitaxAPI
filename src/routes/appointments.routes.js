@@ -8,6 +8,11 @@ const { mapTurnoToNotification } = require('./notifications.routes');
 const { getRuntimeTimeZone } = require('../utils/runtimeTimezone');
 const { addMinutes, DEFAULT_APPOINTMENT_DURATION_MINUTES } = require('../utils/appointmentOccupancy');
 const { findOverlappingAppointmentWithSql } = require('../services/appointmentConflict.service');
+const {
+    buildStoredAppointmentDate,
+    buildStoredAppointmentDateTime,
+    toComparableAppointmentDate,
+} = require('../utils/appointmentDateInterop');
 
 const APP_TIMEZONE = getRuntimeTimeZone();
 
@@ -17,7 +22,7 @@ const formatDateLocal = (value) => {
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
-    }).format(new Date(value));
+    }).format(toComparableAppointmentDate({ fecha_hora: value }));
 };
 
 const formatTimeLocal = (value) => {
@@ -26,7 +31,7 @@ const formatTimeLocal = (value) => {
         hour: "2-digit",
         minute: "2-digit",
         hour12: false,
-    }).format(new Date(value));
+    }).format(toComparableAppointmentDate({ fecha_hora: value }));
 };
 
 router.use(authMiddleware);
@@ -213,8 +218,8 @@ router.post('/', async (req, res) => {
             clienteId = insertRes.insertId;
         }
 
-        const localDate = new Date(`${fecha}T${hora_inicio}:00`);
-        const fullDate = localDate.toISOString().slice(0, 19).replace('T', ' ');
+        const requestedStart = buildStoredAppointmentDate({ date: fecha, time: hora_inicio, timezone: APP_TIMEZONE });
+        const fullDate = buildStoredAppointmentDateTime({ date: fecha, time: hora_inicio, timezone: APP_TIMEZONE });
         const [serviceRows] = await connection.execute(
             'SELECT id_servicio, duracion_minutos FROM SERVICIO WHERE id_servicio = ? LIMIT 1',
             [servicio_id]
@@ -225,7 +230,6 @@ router.post('/', async (req, res) => {
             return res.status(404).json({ error: 'Servicio no encontrado.' });
         }
 
-        const requestedStart = new Date(fullDate);
         const requestedEnd = addMinutes(
             requestedStart,
             serviceRows[0].duracion_minutos || DEFAULT_APPOINTMENT_DURATION_MINUTES
@@ -344,15 +348,16 @@ router.put('/:id', async (req, res) => {
         const nextPrestadorId = prestador_id ? Number(prestador_id) : appointment.id_prestador;
         
         let nextFechaHora = appointment.fecha_hora;
+        let nextFechaHoraDate = toComparableAppointmentDate(appointment);
         if (fecha && hora_inicio) {
-            const localDate = new Date(`${fecha}T${hora_inicio}:00`);
-            nextFechaHora = localDate.toISOString().slice(0, 19).replace('T', ' ');
+            nextFechaHoraDate = buildStoredAppointmentDate({ date: fecha, time: hora_inicio, timezone: APP_TIMEZONE });
+            nextFechaHora = buildStoredAppointmentDateTime({ date: fecha, time: hora_inicio, timezone: APP_TIMEZONE });
         }
 
         const detailsChanged = 
             nextServiceId !== appointment.id_servicio || 
             nextPrestadorId !== appointment.id_prestador || 
-            (fecha && hora_inicio && new Date(nextFechaHora).getTime() !== new Date(appointment.fecha_hora).getTime());
+            (fecha && hora_inicio && nextFechaHoraDate.getTime() !== toComparableAppointmentDate(appointment).getTime());
 
         if (detailsChanged) {
             const [serviceRows] = await connection.execute(
@@ -366,7 +371,7 @@ router.put('/:id', async (req, res) => {
             }
 
             if (!force) {
-                const requestedStart = new Date(nextFechaHora);
+                const requestedStart = nextFechaHoraDate;
                 const requestedEnd = addMinutes(
                     requestedStart,
                     serviceRows[0].duracion_minutos || DEFAULT_APPOINTMENT_DURATION_MINUTES

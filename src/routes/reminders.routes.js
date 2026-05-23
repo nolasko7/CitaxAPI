@@ -2,7 +2,8 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../config/db");
 const authMiddleware = require("../middlewares/auth.middleware");
-const { sendTextMessage } = require("../services/evolution.service");
+const { sendTextMessageWithFallback } = require("../services/evolution.service");
+const { parseSqlDateTimeAsUtc } = require("../utils/appointmentDateInterop");
 
 router.use(authMiddleware);
 
@@ -60,20 +61,24 @@ router.get("/today", async (req, res) => {
         c.nombre_wa AS cliente_nombre,
         c.whatsapp_id,
         s.nombre AS servicio_nombre,
-        cw.instance_name
+        cw.instance_name,
+        cw.whatsapp_number AS company_whatsapp_number
       FROM TURNO t
       JOIN CLIENTE c ON c.id_cliente = t.id_cliente
       JOIN SERVICIO s ON s.id_servicio = t.id_servicio
       LEFT JOIN CONFIG_WHATSAPP cw ON cw.id_empresa = ?
       WHERE c.id_empresa = ?
         AND t.estado IN ('pendiente', 'pendiente_confirmacion', 'confirmado')
-        AND t.fecha_hora BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL 24 HOUR)
+        AND t.fecha_hora BETWEEN UTC_TIMESTAMP() AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 24 HOUR)
       ORDER BY t.fecha_hora ASC`,
       [companyId, companyId],
     );
 
     const appointments = turnos.map((t) => {
-      const d = new Date(t.fecha_hora);
+      const d =
+        t.fecha_hora instanceof Date
+          ? new Date(t.fecha_hora.getTime())
+          : parseSqlDateTimeAsUtc(t.fecha_hora);
       return {
         id_turno: t.id_turno,
         cliente_nombre: t.cliente_nombre || "Cliente",
@@ -136,13 +141,14 @@ router.post("/send-today", async (req, res) => {
         t.fecha_hora,
         c.nombre_wa AS cliente_nombre,
         c.whatsapp_id,
-        cw.instance_name
+        cw.instance_name,
+        cw.whatsapp_number AS company_whatsapp_number
       FROM TURNO t
       JOIN CLIENTE c ON c.id_cliente = t.id_cliente
       LEFT JOIN CONFIG_WHATSAPP cw ON cw.id_empresa = ?
       WHERE c.id_empresa = ?
         AND t.estado IN ('pendiente', 'pendiente_confirmacion', 'confirmado')
-        AND t.fecha_hora BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL 24 HOUR)
+        AND t.fecha_hora BETWEEN UTC_TIMESTAMP() AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 24 HOUR)
       ORDER BY t.fecha_hora ASC`,
       [companyId, companyId],
     );
@@ -163,16 +169,6 @@ router.post("/send-today", async (req, res) => {
           continue;
         }
 
-        const d = new Date(t.fecha_hora);
-        const message = resolveTemplate(customMessage, {
-          cliente_nombre: t.cliente_nombre || "",
-          fecha: formatDateLocal(d),
-          hora: formatTimeLocal(d),
-          empresa_nombre: empresaNombre,
-        });
-
-        await sendTextMessage(t.whatsapp_id, message, t.instance_name);
-
         const [[sentRow]] = await pool.execute(
           "SELECT 1 FROM TURNO_RECORDATORIO WHERE id_turno = ? AND offset_minutos = ? LIMIT 1",
           [t.id_turno, 0],
@@ -184,8 +180,26 @@ router.post("/send-today", async (req, res) => {
           continue;
         }
 
+        const d =
+          t.fecha_hora instanceof Date
+            ? new Date(t.fecha_hora.getTime())
+            : parseSqlDateTimeAsUtc(t.fecha_hora);
+        const message = resolveTemplate(customMessage, {
+          cliente_nombre: t.cliente_nombre || "",
+          fecha: formatDateLocal(d),
+          hora: formatTimeLocal(d),
+          empresa_nombre: empresaNombre,
+        });
+
+        await sendTextMessageWithFallback({
+          phoneNumber: t.whatsapp_id,
+          referencePhone: t.company_whatsapp_number,
+          text: message,
+          instanceName: t.instance_name,
+        });
+
         await pool.execute(
-          "INSERT INTO TURNO_RECORDATORIO (id_turno, offset_minutos, enviado_at) VALUES (?, ?, NOW())",
+          "INSERT INTO TURNO_RECORDATORIO (id_turno, offset_minutos, enviado_at) VALUES (?, ?, UTC_TIMESTAMP())",
           [t.id_turno, 0],
         );
 

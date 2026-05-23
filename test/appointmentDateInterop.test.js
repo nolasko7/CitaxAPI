@@ -2,37 +2,42 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  buildStoredAppointmentDateTime,
   formatStoredTimeKey,
   toComparableAppointmentDate,
 } = require("../src/utils/appointmentDateInterop");
 
-test("manual appointments keep local clock time when normalized from Prisma dates", () => {
-  const storedPrismaDate = new Date("2026-05-16T13:00:00.000Z");
+test("stored UTC datetime renders as Argentina local clock time", () => {
+  const storedPrismaDate = new Date("2026-05-22T20:30:00.000Z");
   const comparable = toComparableAppointmentDate({
     fecha_hora: storedPrismaDate,
-    origen: "manual",
   });
 
   assert.equal(
     formatStoredTimeKey({
       fecha_hora: storedPrismaDate,
-      origen: "manual",
       timezone: "America/Argentina/Buenos_Aires",
     }),
-    "13:00",
+    "17:30",
   );
-  assert.equal(comparable.toISOString(), "2026-05-16T16:00:00.000Z");
+  assert.equal(comparable.toISOString(), "2026-05-22T20:30:00.000Z");
 });
 
-test("whatsapp appointments preserve current UTC-based interpretation", () => {
-  const storedPrismaDate = new Date("2026-05-16T16:00:00.000Z");
-
+test("local Argentina appointment input is stored as UTC literal datetime", () => {
   assert.equal(
-    formatStoredTimeKey({
-      fecha_hora: storedPrismaDate,
-      origen: "whatsapp",
+    buildStoredAppointmentDateTime({
+      date: "2026-05-22",
+      time: "17:30",
       timezone: "America/Argentina/Buenos_Aires",
     }),
-    "13:00",
+    "2026-05-22 20:30:00",
   );
+});
+
+test("SQL datetime strings are parsed as UTC, not process local time", () => {
+  const comparable = toComparableAppointmentDate({
+    fecha_hora: "2026-05-22 20:30:00",
+  });
+
+  assert.equal(comparable.toISOString(), "2026-05-22T20:30:00.000Z");
 });

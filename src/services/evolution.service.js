@@ -22,6 +22,7 @@ const {
 const {
   getEffectiveInitialSurvey,
 } = require("./singleProviderMode.service");
+const { parseSqlDateTimeAsUtc } = require("../utils/appointmentDateInterop");
 
 const { baseUrl: EVOLUTION_API_URL, apiKey: EVOLUTION_API_KEY } =
   getEvolutionApiConfig();
@@ -35,6 +36,21 @@ const SUPPORT_INSTANCE_NAME = String(
 )
   .trim()
   .toLowerCase();
+
+const looksLikeUtf8Mojibake = (value) =>
+  /Ã.|Â.|â.|├|┬/.test(String(value || ""));
+
+const normalizeOutboundText = (value) => {
+  const text = String(value ?? "");
+  if (!text || !looksLikeUtf8Mojibake(text)) return text;
+
+  try {
+    const repaired = Buffer.from(text, "latin1").toString("utf8");
+    return repaired && !looksLikeUtf8Mojibake(repaired) ? repaired : text;
+  } catch {
+    return text;
+  }
+};
 
 const parseIgnoredPhonesFromBotConfig = (rawConfig) => {
   try {
@@ -432,34 +448,42 @@ const disconnectInstance = async (instanceName) => {
 };
 
 // ─── Send text message via Evolution API ──────────────────────────────
-const sendTextMessage = async (phoneNumber, text, instanceName) => {
+const sendTextMessage = async (
+  phoneNumber,
+  text,
+  instanceName,
+  { suppressErrorLog = false } = {},
+) => {
   const normalizedInstanceName = normalizeInstanceName(instanceName);
   const number = String(phoneNumber).replace(/[^\d]/g, "");
+  const normalizedText = normalizeOutboundText(text);
   logger.debug(
-    `sendTextMessage | instance=${normalizedInstanceName} | to=${number} | textLen=${text?.length || 0}`,
+    `sendTextMessage | instance=${normalizedInstanceName} | to=${number} | textLen=${normalizedText?.length || 0}`,
   );
   try {
     const response = await evolutionClient.post(
       `/message/sendText/${normalizedInstanceName}`,
-      { number, text },
+      { number, text: normalizedText },
     );
     rememberBotOutboundMessage({
       instanceName: normalizedInstanceName,
       phoneNumber: number,
-      text,
+      text: normalizedText,
       responseData: response.data,
     });
     return response.data;
   } catch (error) {
-    console.error(
-      `sendTextMessage FAILED | instance=${normalizedInstanceName} | to=${number}`,
-    );
-    console.error("  status:", error.response?.status);
-    console.error(
-      "  data:",
-      JSON.stringify(error.response?.data || {}, null, 2),
-    );
-    console.error("  url:", error.config?.baseURL + error.config?.url);
+    if (!suppressErrorLog) {
+      console.error(
+        `sendTextMessage FAILED | instance=${normalizedInstanceName} | to=${number}`,
+      );
+      console.error("  status:", error.response?.status);
+      console.error(
+        "  data:",
+        JSON.stringify(error.response?.data || {}, null, 2),
+      );
+      console.error("  url:", error.config?.baseURL + error.config?.url);
+    }
     throw error;
   }
 };
@@ -502,7 +526,9 @@ const sendTextMessageWithFallback = async ({
 
   for (const candidate of candidates) {
     try {
-      await sendTextMessage(candidate, text, instanceName);
+      await sendTextMessage(candidate, text, instanceName, {
+        suppressErrorLog: candidates.length > 1,
+      });
       return { sent: true, candidate };
     } catch (error) {
       lastError = error;
@@ -1973,7 +1999,7 @@ const sendAppointmentInfoMessage = async ({ instanceName, phoneNumber }) => {
        WHERE cw.instance_name = ?
          AND (c.whatsapp_id = ? OR c.whatsapp_id = ?)
          AND t.estado IN ('pendiente', 'pendiente_confirmacion', 'confirmado')
-         AND t.fecha_hora >= NOW()
+         AND t.fecha_hora >= UTC_TIMESTAMP()
        ORDER BY t.fecha_hora ASC
        LIMIT 5`,
       [normalizedInstanceName, number, `549${number}`.slice(-11)],
@@ -1998,13 +2024,17 @@ const sendAppointmentInfoMessage = async ({ instanceName, phoneNumber }) => {
 
     const turnosText = rows
       .map((row) => {
-        const fecha = new Date(row.fecha_hora).toLocaleDateString('es-AR', {
+        const appointmentDate =
+          row.fecha_hora instanceof Date
+            ? new Date(row.fecha_hora.getTime())
+            : parseSqlDateTimeAsUtc(row.fecha_hora);
+        const fecha = appointmentDate.toLocaleDateString('es-AR', {
           weekday: 'long',
           day: 'numeric',
           month: 'long',
           timeZone: 'America/Argentina/Buenos_Aires',
         });
-        const hora = new Date(row.fecha_hora).toLocaleTimeString('es-AR', {
+        const hora = appointmentDate.toLocaleTimeString('es-AR', {
           hour: '2-digit',
           minute: '2-digit',
           timeZone: 'America/Argentina/Buenos_Aires',
@@ -2747,5 +2777,6 @@ module.exports = {
   sendAppointmentConfirmationPoll,
   sendPollMessage,
   sendTextMessage,
+  sendTextMessageWithFallback,
   storeLatestQr,
 };

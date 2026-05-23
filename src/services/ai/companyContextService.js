@@ -21,6 +21,8 @@ const {
   findOverlappingAppointmentWithPrisma,
 } = require("../appointmentConflict.service");
 const {
+  buildStoredAppointmentDate,
+  buildUtcDayBoundsForTimezone,
   formatStoredDateKey,
   formatStoredTimeKey,
   toComparableAppointmentDate,
@@ -172,7 +174,11 @@ const toWeekdayNumber = (dateStr) => {
   return d === 0 ? 7 : d;
 };
 const combineDateTime = (dateStr, timeStr) =>
-  new Date(`${dateStr}T${timeStr}:00`);
+  buildStoredAppointmentDate({
+    date: dateStr,
+    time: timeStr,
+    timezone: DEFAULT_TIMEZONE,
+  });
 
 // â”€â”€â”€ Get company context by instance name â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const getCompanyContextByInstanceName = async (
@@ -240,8 +246,10 @@ const getCompanyContextByInstanceName = async (
     if (client) {
       const todayStr = getCurrentDateInTimeZone();
       const now = new Date();
-      const todayStart = new Date(now);
-      todayStart.setHours(0, 0, 0, 0);
+      const { dayStart: todayStart } = buildUtcDayBoundsForTimezone(
+        todayStr,
+        DEFAULT_TIMEZONE,
+      );
       const confirmedAppointments = await prisma.tURNO.findMany({
         where: {
           id_cliente: client.id_cliente,
@@ -419,13 +427,20 @@ const listAvailableSlots = async ({
     },
   });
 
+  const { dayStart: rangeStart, dayEnd: rangeEnd } =
+    buildUtcDayBoundsForTimezone(
+      normalizedStart,
+      DEFAULT_TIMEZONE,
+      normalizedEnd,
+    );
+
   const existingTurnos = await prisma.tURNO.findMany({
     where: {
       id_prestador: { in: prestadores.map((p) => p.id_prestador) },
       estado: { in: OCCUPYING_APPOINTMENT_STATUSES },
       fecha_hora: {
-        gte: new Date(`${normalizedStart}T00:00:00`),
-        lte: new Date(`${normalizedEnd}T23:59:59`),
+        gte: rangeStart,
+        lte: rangeEnd,
       },
     },
     include: { SERVICIO: true },
@@ -652,7 +667,11 @@ const createAppointmentFromAssistant = async ({
 
   const duration =
     servicio.duracion_minutos || DEFAULT_APPOINTMENT_DURATION_MINUTES;
-  const fechaHora = new Date(`${normalizedDate}T${normalizedTime}:00`);
+  const fechaHora = buildStoredAppointmentDate({
+    date: normalizedDate,
+    time: normalizedTime,
+    timezone: DEFAULT_TIMEZONE,
+  });
 
   // Validar anticipación mínima (MIN_BOOKING_LEAD_MINUTES, default 20 min)
   const nowForValidation = getNowInTimezone();
@@ -806,8 +825,10 @@ const listAppointmentsByDay = async ({ companyId, date, referenceDate }) => {
     normalizeDate(date, referenceDate) || normalizeDate(referenceDate);
   if (!normalizedDate) return [];
 
-  const dayStart = new Date(`${normalizedDate}T00:00:00`);
-  const dayEnd = new Date(`${normalizedDate}T23:59:59`);
+  const { dayStart, dayEnd } = buildUtcDayBoundsForTimezone(
+    normalizedDate,
+    DEFAULT_TIMEZONE,
+  );
 
   const turnos = await prisma.tURNO.findMany({
     where: {
@@ -852,9 +873,13 @@ const cancelAppointmentByCompanyFromAssistant = async ({
   };
 
   if (normalizedDate) {
+    const { dayStart, dayEnd } = buildUtcDayBoundsForTimezone(
+      normalizedDate,
+      DEFAULT_TIMEZONE,
+    );
     where.fecha_hora = {
-      gte: new Date(`${normalizedDate}T00:00:00`),
-      lte: new Date(`${normalizedDate}T23:59:59`),
+      gte: dayStart,
+      lte: dayEnd,
     };
   } else {
     delete where.fecha_hora;

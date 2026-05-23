@@ -16,6 +16,10 @@ const {
 const { hasClienteEmailColumn } = require("../services/clientSchema.service");
 const { hasTurnoOrigenColumn } = require("../services/turnoSchema.service");
 const { resolveCompanyLandingTemplate } = require("../utils/companyLanding");
+const {
+  buildStoredAppointmentDate,
+  buildStoredAppointmentDateTime,
+} = require("../utils/appointmentDateInterop");
 
 const SUPPORT_INSTANCE_NAME = String(
   process.env.SUPPORT_WHATSAPP_INSTANCE || "citax-support-whatsapp",
@@ -59,10 +63,8 @@ const isValidTime = (value) => {
   return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
 };
 
-const buildAppointmentDateTime = (date, time) => {
-  const localDate = new Date(`${date}T${time}:00`);
-  return localDate.toISOString().slice(0, 19).replace('T', ' ');
-};
+const buildAppointmentDateTime = (date, time) =>
+  buildStoredAppointmentDateTime({ date, time });
 
 const findCompanyBySlug = async (slug) => {
   const [rows] = await pool.execute(
@@ -490,7 +492,7 @@ router.post("/landing/:slug/appointments", async (req, res) => {
     await connection.beginTransaction();
 
     const appointmentDateTime = buildAppointmentDateTime(date, time);
-    const requestedStart = new Date(appointmentDateTime);
+    const requestedStart = buildStoredAppointmentDate({ date, time });
     const requestedEnd = addMinutes(
       requestedStart,
       serviceRows[0].duracion_minutos || DEFAULT_APPOINTMENT_DURATION_MINUTES,

@@ -5,6 +5,7 @@ require("./assistantPrompt.test");
 require("./geminiService.test");
 require("./slotPresentation.test");
 require("./appointmentDateInterop.test");
+require("./reminderService.test");
 require("./availabilitySchedule.test");
 require("./companyContextService.test");
 require("./singleProviderMode.service.test");
