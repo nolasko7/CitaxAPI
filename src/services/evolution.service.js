@@ -1127,6 +1127,10 @@ const WHATSAPP_OPTED_IN_TTL_MS =
   Number(process.env.WHATSAPP_OPTED_IN_TTL_HOURS || 12) * 60 * 60 * 1000;
 const WHATSAPP_FLOW_INACTIVITY_TTL_MS =
   Number(process.env.WHATSAPP_FLOW_INACTIVITY_TTL_MINUTES || 60) * 60 * 1000;
+const WHATSAPP_AWAITING_CONFIRMATION_TTL_MS =
+  Number(process.env.WHATSAPP_AWAITING_CONFIRMATION_TTL_HOURS || 4) * 60 * 60 * 1000;
+const WHATSAPP_CONFIRMATION_REMINDER_MS =
+  Number(process.env.WHATSAPP_CONFIRMATION_REMINDER_MINUTES || 30) * 60 * 1000;
 const WHATSAPP_NO_REPLY_MUTE_MS =
   Number(process.env.WHATSAPP_NO_REPLY_MUTE_HOURS || 12) * 60 * 60 * 1000;
 const WHATSAPP_CONVERSATION_LOG_ENABLED =
@@ -1136,6 +1140,71 @@ const WHATSAPP_VERBOSE_LOGS =
 const WHATSAPP_CONVERSATION_LOG_FILE =
   process.env.WHATSAPP_CONVERSATION_LOG_FILE ||
   path.join(__dirname, "../logs/whatsapp_conversations.ndjson");
+
+// ─── Confirmation reminder timers ─────────────────────────────────────
+const pendingConfirmationReminders = new Map();
+
+const cancelConfirmationReminder = (gateKey) => {
+  const existing = pendingConfirmationReminders.get(gateKey);
+  if (existing) {
+    clearTimeout(existing);
+    pendingConfirmationReminders.delete(gateKey);
+  }
+};
+
+const scheduleConfirmationReminder = ({
+  gateKey,
+  phoneNumber,
+  instanceName,
+  confirmationText,
+}) => {
+  cancelConfirmationReminder(gateKey);
+
+  if (WHATSAPP_CONFIRMATION_REMINDER_MS <= 0) return;
+
+  const timer = setTimeout(async () => {
+    pendingConfirmationReminders.delete(gateKey);
+
+    // Verificar que el gate siga en awaiting_confirmation
+    const currentGate = whatsappConversationGate.get(gateKey);
+    if (!currentGate || currentGate.status !== "awaiting_confirmation") {
+      return;
+    }
+
+    // Verificar que no se haya enviado ya un recordatorio
+    if (currentGate.reminderSentAt) {
+      return;
+    }
+
+    try {
+      const reminderText = "Hola! Te recuerdo que habías iniciado la solicitud de un turno y quedó pendiente de confirmación. ¿Deseás confirmarlo?";
+      await sendTextMessage(phoneNumber, reminderText, instanceName);
+
+      // Marcar que el recordatorio fue enviado para no duplicar
+      whatsappConversationGate.set(gateKey, {
+        ...currentGate,
+        reminderSentAt: Date.now(),
+      });
+
+      logger.info(
+        `Recordatorio confirmación | to=${maskPhoneForLog(phoneNumber)} | delay=${Math.round(WHATSAPP_CONFIRMATION_REMINDER_MS / 60000)}min`,
+      );
+      appendConversationLog({
+        event: "confirmation_reminder_sent",
+        instanceName,
+        phone: phoneNumber,
+        text: reminderText,
+      });
+    } catch (error) {
+      console.error(
+        "❌ Error enviando recordatorio de confirmación:",
+        error.message,
+      );
+    }
+  }, WHATSAPP_CONFIRMATION_REMINDER_MS);
+
+  pendingConfirmationReminders.set(gateKey, timer);
+};
 
 const maskPhoneForLog = (value) => {
   const raw = String(value || "").replace(/[^\d]/g, "");
@@ -1198,6 +1267,27 @@ const normalizeSurveyText = (value) =>
     .replace(/[^\w\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+const looksLikeConfirmationQuestion = (text) => {
+  const normalized = String(text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const patterns = [
+    /(te|lo)\s*(confirmo|confirme|agendo|agende|reservo|reserve|anoto|anote)/i,
+    /confirmamos/i,
+    /agendamos/i,
+    /reservamos/i,
+    /anotamos/i,
+    /te parece/i,
+    /confirmo entonces/i,
+  ];
+
+  return patterns.some((p) => p.test(normalized));
+};
 
 const rememberBotOutboundMessage = ({
   instanceName,
@@ -1820,6 +1910,36 @@ const flushIncomingMessageBatch = async (batchKey) => {
       logger.info(
         `Flujo post-turno | from=${maskPhoneForLog(mergedMessage.phoneNumber)} | grace=10min → needs_survey`,
       );
+    } else if (
+      instanceName !== normalizeInstanceName(SUPPORT_INSTANCE_NAME) &&
+      aiResponse?.enabled &&
+      aiResponse?.text &&
+      looksLikeConfirmationQuestion(aiResponse.text)
+    ) {
+      // La LLM hizo una pregunta de confirmación (ej: "¿Te confirmo el turno?").
+      // Transicionar a awaiting_confirmation con TTL extendido para que el
+      // cliente pueda responder incluso horas después sin recibir la poll de nuevo.
+      const gateKey = getConversationGateKey({
+        instanceName,
+        phoneNumber: mergedMessage.phoneNumber,
+      });
+      whatsappConversationGate.set(gateKey, {
+        status: "awaiting_confirmation",
+        updatedAt: Date.now(),
+        lastConfirmationText: String(aiResponse.text || "").trim(),
+      });
+
+      // Programar recordatorio automático si el cliente no responde
+      scheduleConfirmationReminder({
+        gateKey,
+        phoneNumber: mergedMessage.phoneNumber,
+        instanceName: normalizeInstanceName(instanceName),
+        confirmationText: String(aiResponse.text || "").trim(),
+      });
+
+      logger.info(
+        `Confirmación pendiente | from=${maskPhoneForLog(mergedMessage.phoneNumber)} | ttl=${Math.round(WHATSAPP_AWAITING_CONFIRMATION_TTL_MS / 60000)}min | reminder=${Math.round(WHATSAPP_CONFIRMATION_REMINDER_MS / 60000)}min`,
+      );
     }
   } catch (error) {
     logger.error({ err: error }, `Error ejecutando asistente IA: ${error.message}`);
@@ -2390,15 +2510,22 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
     if (
       activeGateState &&
       activeGateState?.status !== "muted" &&
-      activeGateState?.status !== "pending" &&
-      now - Number(activeGateState.updatedAt || 0) >
-        WHATSAPP_FLOW_INACTIVITY_TTL_MS
+      activeGateState?.status !== "pending"
     ) {
-      whatsappConversationGate.delete(gateKey);
-      activeGateState = null;
-      logger.info(
-        `Flujo reiniciado por inactividad | from=${maskPhoneForLog(normalized.phoneNumber)}`,
-      );
+      const effectiveInactivityTtl =
+        activeGateState?.status === "awaiting_confirmation"
+          ? WHATSAPP_AWAITING_CONFIRMATION_TTL_MS
+          : WHATSAPP_FLOW_INACTIVITY_TTL_MS;
+      if (
+        now - Number(activeGateState.updatedAt || 0) > effectiveInactivityTtl
+      ) {
+        cancelConfirmationReminder(gateKey);
+        whatsappConversationGate.delete(gateKey);
+        activeGateState = null;
+        logger.info(
+          `Flujo reiniciado por inactividad | from=${maskPhoneForLog(normalized.phoneNumber)}`,
+        );
+      }
     }
 
     if (activeGateState?.status === "needs_survey") {
@@ -2724,7 +2851,11 @@ const processIncomingMessage = async ({ instanceName, webhookData }) => {
       continue;
     }
 
-    if (activeGateState?.status === "opted-in") {
+    if (activeGateState?.status === "opted-in" || activeGateState?.status === "awaiting_confirmation") {
+      // Si estaba esperando confirmación, cancelar el recordatorio programado
+      if (activeGateState?.status === "awaiting_confirmation") {
+        cancelConfirmationReminder(gateKey);
+      }
       whatsappConversationGate.set(gateKey, {
         ...activeGateState,
         status: "opted-in",

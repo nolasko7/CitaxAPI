@@ -107,12 +107,16 @@ const setWhatsappSessionState = ({
   instanceName,
   customerPhone,
   lastAssistantReply = "",
+  ttlOverrideMs = null,
 }) => {
   const key = getConversationKey({ instanceName, customerPhone });
+  const effectiveTtl = ttlOverrideMs && ttlOverrideMs > 0
+    ? ttlOverrideMs
+    : WHATSAPP_CHAT_CONTEXT_TTL_MS;
   const payload = {
     lastAssistantReply: String(lastAssistantReply || "").trim(),
     updatedAt: Date.now(),
-    expiresAt: Date.now() + WHATSAPP_CHAT_CONTEXT_TTL_MS,
+    expiresAt: Date.now() + effectiveTtl,
   };
 
   whatsappSessionState.set(key, payload);
@@ -518,6 +522,27 @@ const normalizeAssistantText = (value) =>
     .replace(/[!?.,;:()[\]{}"']/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+const looksLikeConfirmationQuestionLocal = (text) => {
+  const normalized = String(text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const patterns = [
+    /(te|lo)\s*(confirmo|confirme|agendo|agende|reservo|reserve|anoto|anote)/i,
+    /confirmamos/i,
+    /agendamos/i,
+    /reservamos/i,
+    /anotamos/i,
+    /te parece/i,
+    /confirmo entonces/i,
+  ];
+
+  return patterns.some((p) => p.test(normalized));
+};
 
 const renderWelcomeMessageTemplate = ({ template = "", contactName = "" }) => {
   const rendered = String(template || "")
@@ -2229,16 +2254,33 @@ const runWhatsappAssistant = async ({
     };
   }
 
+  // Detectar si la respuesta es una pregunta de confirmación de turno.
+  // Si lo es, extender el TTL de la sesión para que el historial sobreviva
+  // en caso de que el cliente tarde horas en responder.
+  const AWAITING_CONFIRMATION_SESSION_TTL_MS =
+    Number(process.env.WHATSAPP_AWAITING_CONFIRMATION_TTL_HOURS || 4) * 60 * 60 * 1000;
+  const isConfirmationReply = looksLikeConfirmationQuestionLocal(finalReply);
+  const sessionTtlOverride = isConfirmationReply
+    ? AWAITING_CONFIRMATION_SESSION_TTL_MS
+    : null;
+
   setWhatsappSessionState({
     instanceName,
     customerPhone,
     lastAssistantReply: finalReply,
+    ttlOverrideMs: sessionTtlOverride,
   });
   setConversationHistory({
     instanceName,
     customerPhone,
     messages: result.messages,
   });
+
+  if (isConfirmationReply) {
+    console.log(
+      `Sesión LLM extendida (confirmación pendiente) | phone=${customerPhone} | ttl=${Math.round(AWAITING_CONFIRMATION_SESSION_TTL_MS / 60000)}min`,
+    );
+  }
 
   return {
     enabled: true,
