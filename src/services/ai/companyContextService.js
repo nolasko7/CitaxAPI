@@ -180,11 +180,16 @@ const combineDateTime = (dateStr, timeStr) =>
     timezone: DEFAULT_TIMEZONE,
   });
 
-// â”€â”€â”€ Get company context by instance name â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const getCompanyContextByInstanceName = async (
-  instanceName,
-  customerPhone = null,
-) => {
+// ─── Cache de contexto estático por empresa (TTL 5 min) ──────────────────────
+const STATIC_CONTEXT_TTL_MS = 5 * 60 * 1000; // 5 minutos
+const staticContextCache = new Map();
+
+const getStaticCompanyContext = async (instanceName) => {
+  const cached = staticContextCache.get(instanceName);
+  if (cached && Date.now() - cached.timestamp < STATIC_CONTEXT_TTL_MS) {
+    return cached.data;
+  }
+
   const config = await prisma.cONFIG_WHATSAPP.findFirst({
     where: { instance_name: instanceName },
     include: {
@@ -233,12 +238,53 @@ const getCompanyContextByInstanceName = async (
     price: Number(s.precio),
   }));
 
+  const botConfig = await getCompanyBotConfig(empresa.id_empresa).catch(
+    () => ({}),
+  );
+  const singleProviderMode = isSingleProviderModeEnabledForConfig(botConfig);
+
+  const primerPersonaActiva =
+    professionals.length === 1 &&
+    (singleProviderMode || botConfig.primera_persona === true);
+  const personaName = primerPersonaActiva
+    ? professionals[0].name
+    : professionals[0]?.name || empresa.nombre_comercial;
+
+  const data = {
+    companyId: empresa.id_empresa,
+    companyName: empresa.nombre_comercial,
+    companySlug: empresa.slug,
+    companyAddress: String(empresa.direccion || "").trim(),
+    instanceName,
+    whatsappNumber: config.whatsapp_number,
+    professionals,
+    services,
+    horarios,
+    assistantPersonaName: personaName,
+    welcomeMessage: String(botConfig?.mensaje_bienvenida || "").trim(),
+    ownPhrases: normalizeOwnPhrasesConfig(botConfig?.palabras_propias),
+    singleProviderMode,
+    primerPersonaActiva,
+  };
+
+  staticContextCache.set(instanceName, { data, timestamp: Date.now() });
+  return data;
+};
+
+// ─── Get company context by instance name ─────────────────────────────────────
+const getCompanyContextByInstanceName = async (
+  instanceName,
+  customerPhone = null,
+) => {
+  const staticContext = await getStaticCompanyContext(instanceName);
+  if (!staticContext) return null;
+
   let customerPendingAppointments = [];
   if (customerPhone) {
     const normalizedPhone = normalizePhone(customerPhone);
     const client = await prisma.cLIENTE.findFirst({
       where: {
-        id_empresa: empresa.id_empresa,
+        id_empresa: staticContext.companyId,
         whatsapp_id: { contains: normalizedPhone.slice(-8) },
       },
     });
@@ -300,40 +346,13 @@ const getCompanyContextByInstanceName = async (
     }
   }
 
-  // Leer bot_config para determinar el modo primera persona
-  const botConfig = await getCompanyBotConfig(empresa.id_empresa).catch(
-    () => ({}),
-  );
-  const singleProviderMode = isSingleProviderModeEnabledForConfig(botConfig);
-
-  // Primera persona: solo aplica si estÃ¡ habilitado Y hay exactamente 1 prestador activo
-  const primerPersonaActiva =
-    professionals.length === 1 &&
-    (singleProviderMode || botConfig.primera_persona === true);
-  const personaName = primerPersonaActiva
-    ? professionals[0].name
-    : professionals[0]?.name || empresa.nombre_comercial;
-
   return {
-    companyId: empresa.id_empresa,
-    companyName: empresa.nombre_comercial,
-    companySlug: empresa.slug,
-    companyAddress: String(empresa.direccion || "").trim(),
+    ...staticContext,
     timezone: DEFAULT_TIMEZONE,
     currentDate: getCurrentDateInTimeZone(),
     currentDayName: getCurrentDayNameInSpanish(),
     currentTime: getCurrentTimeInTimeZone(),
-    instanceName,
-    whatsappNumber: config.whatsapp_number,
-    professionals,
-    services,
-    horarios,
     customerPendingAppointments,
-    assistantPersonaName: personaName,
-    welcomeMessage: String(botConfig?.mensaje_bienvenida || "").trim(),
-    ownPhrases: normalizeOwnPhrasesConfig(botConfig?.palabras_propias),
-    singleProviderMode,
-    primerPersonaActiva,
   };
 };
 

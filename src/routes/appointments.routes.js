@@ -131,6 +131,17 @@ router.get('/', async (req, res) => {
     try {
         const includeClientEmail = await hasClienteEmailColumn();
         const includeOrigin = await hasTurnoOrigenColumn();
+
+        // Paginación por rango de fechas (default: ±15 días desde hoy)
+        const now = new Date();
+        const defaultDesde = new Date(now);
+        defaultDesde.setDate(defaultDesde.getDate() - 15);
+        const defaultHasta = new Date(now);
+        defaultHasta.setDate(defaultHasta.getDate() + 15);
+
+        const desde = req.query.desde || defaultDesde.toISOString().slice(0, 10);
+        const hasta = req.query.hasta || defaultHasta.toISOString().slice(0, 10);
+
         const query = `
             SELECT t.*, c.nombre_wa, c.whatsapp_id,
                    ${includeClientEmail ? 'c.email AS cliente_email,' : 'NULL AS cliente_email,'}
@@ -143,9 +154,14 @@ router.get('/', async (req, res) => {
             JOIN USUARIO u ON p.id_usuario = u.id_usuario
             JOIN SERVICIO s ON t.id_servicio = s.id_servicio
             WHERE c.id_empresa = ?
+              AND t.fecha_hora >= ? AND t.fecha_hora <= ?
             ORDER BY t.fecha_hora ASC
         `;
-        const [rows] = await pool.execute(query, [req.user.id_empresa]);
+        const [rows] = await pool.execute(query, [
+            req.user.id_empresa,
+            `${desde} 00:00:00`,
+            `${hasta} 23:59:59`,
+        ]);
 
         const formatted = rows.map(appt => ({
             id: appt.id_turno,
@@ -444,6 +460,16 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
     try {
+        // Verificar que el turno pertenece a la empresa del usuario autenticado
+        const [rows] = await pool.execute(
+            `SELECT t.id_turno FROM TURNO t
+             JOIN CLIENTE c ON t.id_cliente = c.id_cliente
+             WHERE t.id_turno = ? AND c.id_empresa = ?`,
+            [req.params.id, req.user.id_empresa]
+        );
+        if (!rows.length) {
+            return res.status(404).json({ error: 'Turno no encontrado' });
+        }
         await pool.execute('DELETE FROM TURNO WHERE id_turno = ?', [req.params.id]);
         res.json({ success: true });
     } catch (err) {

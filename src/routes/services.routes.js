@@ -14,7 +14,7 @@ router.use(authMiddleware);
 router.get('/', async (req, res) => {
     try {
         const [rows] = await pool.execute(
-            'SELECT * FROM SERVICIO WHERE id_empresa = ?',
+            'SELECT id_servicio, nombre, descripcion, duracion_minutos, precio FROM SERVICIO WHERE id_empresa = ?',
             [req.user.id_empresa]
         );
         const formatted = rows.map(s => ({

@@ -13,29 +13,27 @@ router.get('/', async (req, res) => {
     try {
         const singleProviderMode = await isSingleProviderModeEnabled(req.user.id_empresa);
         const query = `
-            SELECT p.id_prestador, p.activo, u.id_usuario, u.nombre, u.apellido, u.email
+            SELECT p.id_prestador, p.activo, u.id_usuario, u.nombre, u.apellido, u.email,
+                   GROUP_CONCAT(ps.id_servicio) AS servicios
             FROM PRESTADOR p
             JOIN USUARIO u ON p.id_usuario = u.id_usuario
+            LEFT JOIN PRESTADOR_SERVICIO ps ON p.id_prestador = ps.id_prestador
             WHERE p.id_empresa = ?
             ${singleProviderMode ? 'AND p.activo = 1' : ''}
+            GROUP BY p.id_prestador, p.activo, u.id_usuario, u.nombre, u.apellido, u.email
         `;
         const [rows] = await pool.execute(query, [req.user.id_empresa]);
         
-        // Fetch services for each professional to include in the list
-        const formatted = await Promise.all(rows.map(async p => {
-            const [svcRows] = await pool.execute(
-                'SELECT id_servicio FROM PRESTADOR_SERVICIO WHERE id_prestador = ?',
-                [p.id_prestador]
-            );
-            return {
-                id: p.id_prestador,
-                id_usuario: p.id_usuario,
-                nombre: p.nombre,
-                apellido: p.apellido,
-                email: p.email,
-                activo: p.activo,
-                servicios: svcRows.map(s => s.id_servicio)
-            };
+        const formatted = rows.map(p => ({
+            id: p.id_prestador,
+            id_usuario: p.id_usuario,
+            nombre: p.nombre,
+            apellido: p.apellido,
+            email: p.email,
+            activo: p.activo,
+            servicios: p.servicios
+                ? p.servicios.split(',').map(Number)
+                : []
         }));
         
         res.json(formatted);
@@ -150,7 +148,7 @@ router.delete('/:id', requireRole('admin_empresa'), async (req, res) => {
 router.get('/:id/services', async (req, res) => {
     try {
         const query = `
-            SELECT s.* 
+            SELECT s.id_servicio, s.nombre, s.descripcion, s.duracion_minutos, s.precio
             FROM SERVICIO s
             JOIN PRESTADOR_SERVICIO ps ON s.id_servicio = ps.id_servicio
             WHERE ps.id_prestador = ? AND s.id_empresa = ?

@@ -466,28 +466,9 @@ router.post("/landing/:slug/appointments", async (req, res) => {
       });
     }
 
-    const availableSlots = await listAvailableSlots({
-      companyId: company.id_empresa,
-      professionalId,
-      serviceId,
-      startDate: date,
-      endDate: date,
-      referenceDate: date,
-      limit: 120,
-    });
-
-    const slotStillAvailable = availableSlots.some(
-      (slot) =>
-        Number(slot.professionalId) === professionalId &&
-        slot.date === date &&
-        slot.time === time,
-    );
-
-    if (!slotStillAvailable) {
-      return res.status(409).json({
-        error: "Ese horario ya no esta disponible",
-      });
-    }
+    // La validación de conflicto se hace con findOverlappingAppointmentWithSql más abajo.
+    // No es necesario calcular TODOS los slots disponibles aquí (operación costosa con Prisma)
+    // ya que el frontend solo envía horarios válidos desde el selector de disponibilidad.
 
     await connection.beginTransaction();
 
