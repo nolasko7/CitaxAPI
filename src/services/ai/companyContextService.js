@@ -356,15 +356,27 @@ const getCompanyContextByInstanceName = async (
   };
 };
 
+// ─── Cache companyId → instanceName (mismo TTL que el contexto estático) ──────
+const companyIdToInstanceCache = new Map();
+
 const getCompanyContextByCompanyId = async (
   companyId,
   customerPhone = null,
 ) => {
+  const numId = Number(companyId);
+  const cached = companyIdToInstanceCache.get(numId);
+
+  if (cached && Date.now() - cached.ts < STATIC_CONTEXT_TTL_MS) {
+    return getCompanyContextByInstanceName(cached.instanceName, customerPhone);
+  }
+
   const config = await prisma.cONFIG_WHATSAPP.findFirst({
-    where: { id_empresa: Number(companyId) },
+    where: { id_empresa: numId },
   });
 
   if (!config?.instance_name) return null;
+
+  companyIdToInstanceCache.set(numId, { instanceName: config.instance_name, ts: Date.now() });
   return getCompanyContextByInstanceName(config.instance_name, customerPhone);
 };
 

@@ -8,6 +8,18 @@ router.use(authMiddleware);
 // GET /api/clients — lista clientes con stats
 router.get('/', async (req, res) => {
   try {
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const offset = parseInt(req.query.offset) || 0;
+    const search = (req.query.search || '').trim();
+
+    let whereClause = 'WHERE c.id_empresa = ?';
+    const params = [req.user.id_empresa];
+
+    if (search) {
+      whereClause += ' AND c.nombre_wa LIKE ?';
+      params.push(`%${search}%`);
+    }
+
     const [rows] = await pool.execute(
       `SELECT
          c.id_cliente,
@@ -17,10 +29,11 @@ router.get('/', async (req, res) => {
          MAX(CASE WHEN t.fecha_hora <= NOW() THEN t.fecha_hora END) AS ultimo_turno
        FROM CLIENTE c
        LEFT JOIN TURNO t ON t.id_cliente = c.id_cliente
-       WHERE c.id_empresa = ?
+       ${whereClause}
        GROUP BY c.id_cliente
-       ORDER BY ultimo_turno DESC`,
-      [req.user.id_empresa]
+       ORDER BY ultimo_turno DESC
+       LIMIT ${limit} OFFSET ${offset}`,
+      params
     );
 
     const now = new Date();

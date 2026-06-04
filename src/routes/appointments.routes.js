@@ -132,12 +132,12 @@ router.get('/', async (req, res) => {
         const includeClientEmail = await hasClienteEmailColumn();
         const includeOrigin = await hasTurnoOrigenColumn();
 
-        // Paginación por rango de fechas (default: ±15 días desde hoy)
+        // Paginación por rango de fechas (default: ±30 días desde hoy)
         const now = new Date();
         const defaultDesde = new Date(now);
-        defaultDesde.setDate(defaultDesde.getDate() - 15);
+        defaultDesde.setDate(defaultDesde.getDate() - 30);
         const defaultHasta = new Date(now);
-        defaultHasta.setDate(defaultHasta.getDate() + 15);
+        defaultHasta.setDate(defaultHasta.getDate() + 30);
 
         const desde = req.query.desde || defaultDesde.toISOString().slice(0, 10);
         const hasta = req.query.hasta || defaultHasta.toISOString().slice(0, 10);
