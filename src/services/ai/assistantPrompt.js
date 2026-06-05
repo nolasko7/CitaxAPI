@@ -78,7 +78,7 @@ const buildAssistantPrompt = (companyContext, customerName = "") => {
         .join("\n")
     : "No hay servicios configurados aun.";
 
-  const futureTurnos = customerPendingAppointments.filter((a) => !a.alreadyPassed);
+  const futureTurnos = customerPendingAppointments.filter((a) => !a.alreadyPassed).slice(0, 3);
   const todayPassedTurnos = customerPendingAppointments.filter((a) => a.alreadyPassed);
 
   const pendingList = futureTurnos.length

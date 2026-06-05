@@ -300,6 +300,7 @@ const getCompanyContextByInstanceName = async (
         where: {
           id_cliente: client.id_cliente,
           estado: "confirmado",
+          fecha_hora: { gte: todayStart },
         },
         include: {
           SERVICIO: true,
@@ -397,7 +398,7 @@ const listAvailableSlots = async ({
     normalizeDate(referenceDate) ||
     getCurrentDateInTimeZone();
   const normalizedEnd =
-    normalizeDate(endDate, referenceDate) || addDays(normalizedStart, 14);
+    normalizeDate(endDate, referenceDate) || addDays(normalizedStart, 7);
 
   const empresa = await prisma.eMPRESA.findUnique({
     where: { id_empresa: companyId },
@@ -794,9 +795,15 @@ const cancelAppointmentFromAssistant = async ({
 
   if (!client) throw new Error("No encontrÃ© tu registro de cliente.");
 
+  const { dayStart: cancelTodayStart } = buildUtcDayBoundsForTimezone(
+    getCurrentDateInTimeZone(),
+    DEFAULT_TIMEZONE,
+  );
+
   const where = {
     id_cliente: client.id_cliente,
     estado: { in: ["pendiente", "confirmado"] },
+    fecha_hora: { gte: cancelTodayStart },
   };
 
   const appointments = await prisma.tURNO.findMany({
@@ -913,7 +920,11 @@ const cancelAppointmentByCompanyFromAssistant = async ({
       lte: dayEnd,
     };
   } else {
-    delete where.fecha_hora;
+    const { dayStart: cancelTodayStartFallback } = buildUtcDayBoundsForTimezone(
+      getCurrentDateInTimeZone(),
+      DEFAULT_TIMEZONE,
+    );
+    where.fecha_hora = { gte: cancelTodayStartFallback };
   }
 
   const appointments = await prisma.tURNO.findMany({

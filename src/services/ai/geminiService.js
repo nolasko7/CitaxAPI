@@ -1437,7 +1437,7 @@ const createTools = ({
           startDate,
           endDate,
           referenceDate: companyContext.currentDate,
-          limit: limit || 200,
+          limit: Math.min(limit || 150, 150),
         });
         const groupedSlots = summarizeAvailableSlotsForAssistant({
           slots,
@@ -1471,9 +1471,9 @@ const createTools = ({
           limit: z
             .number()
             .optional()
-            .default(200)
+            .default(150)
             .describe(
-              "Maximo de resultados (1-200). Usar siempre 200 para no truncar dias.",
+              "Maximo de resultados (1-150). Busca de a 1 o 2 dias para obtener resultados precisos.",
             ),
         }),
       },
