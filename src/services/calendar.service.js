@@ -34,13 +34,21 @@ async function generateCalendarIcs(token) {
     return null;
   }
 
+  const unMesAtras = new Date();
+  unMesAtras.setMonth(unMesAtras.getMonth() - 1);
+  const seisMesesAdelante = new Date();
+  seisMesesAdelante.setMonth(seisMesesAdelante.getMonth() + 6);
+
   const turnos = await prisma.TURNO.findMany({
     where: {
       PRESTADOR: {
         EMPRESA: { id_empresa: empresa.id_empresa },
       },
       estado: { in: VALID_ESTADOS },
-      fecha_hora: { gte: new Date('2020-01-01') },
+      fecha_hora: {
+        gte: unMesAtras,
+        lte: seisMesesAdelante,
+      },
     },
     include: {
       CLIENTE: { select: { nombre_wa: true } },
