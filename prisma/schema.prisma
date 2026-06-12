@@ -16,6 +16,7 @@ model CLIENTE {
   EMPRESA              EMPRESA                @relation(fields: [id_empresa], references: [id_empresa], onDelete: Cascade, onUpdate: NoAction, map: "fk_cliente_empresa")
   MENSAJE_CONVERSACION MENSAJE_CONVERSACION[]
   TURNO                TURNO[]
+  TURNO_FIJO           TURNO_FIJO[]
 
   @@unique([id_empresa, whatsapp_id], map: "id_empresa")
 }
@@ -46,6 +47,7 @@ model EMPRESA {
   PRESTADOR               PRESTADOR[]
   SERVICIO                SERVICIO[]
   BLOCKED_DATES           BLOCKED_DATES[]
+  TURNO_FIJO              TURNO_FIJO[]
 
   @@index([id_usuario], map: "fk_empresa_usuario")
 }
@@ -88,6 +90,7 @@ model PRESTADOR {
   TURNO        TURNO[]
   SERVICIOS    PRESTADOR_SERVICIO[]
   BLOCKED_DATES BLOCKED_DATES[]
+  TURNO_FIJO   TURNO_FIJO[]
 
   @@index([id_empresa], map: "fk_prestador_empresa")
 }
@@ -111,26 +114,55 @@ model SERVICIO {
   EMPRESA          EMPRESA              @relation(fields: [id_empresa], references: [id_empresa], onDelete: Cascade, onUpdate: NoAction, map: "fk_servicio_empresa")
   TURNO            TURNO[]
   PRESTADORES      PRESTADOR_SERVICIO[]
+  TURNO_FIJO       TURNO_FIJO[]
 
   @@index([id_empresa], map: "fk_servicio_empresa")
 }
 
 model TURNO {
-  id_turno     Int                    @id @default(autoincrement())
-  id_cliente   Int
-  id_prestador Int
-  id_servicio  Int
-  fecha_hora   DateTime               @db.DateTime(0)
-  estado       String                 @default("pendiente") @db.VarChar(50)
-  origen       String?                @db.VarChar(50)
-  CLIENTE      CLIENTE                @relation(fields: [id_cliente], references: [id_cliente], onDelete: Cascade, onUpdate: NoAction, map: "fk_turno_cliente")
-  PRESTADOR    PRESTADOR              @relation(fields: [id_prestador], references: [id_prestador], onDelete: Cascade, onUpdate: NoAction, map: "fk_turno_prestador")
-  SERVICIO     SERVICIO               @relation(fields: [id_servicio], references: [id_servicio], onDelete: Cascade, onUpdate: NoAction, map: "fk_turno_servicio")
+  id_turno      Int                    @id @default(autoincrement())
+  id_cliente    Int
+  id_prestador  Int
+  id_servicio   Int
+  fecha_hora    DateTime               @db.DateTime(0)
+  estado        String                 @default("pendiente") @db.VarChar(50)
+  origen        String?                @db.VarChar(50)
+  id_turno_fijo Int?
+  CLIENTE       CLIENTE                @relation(fields: [id_cliente], references: [id_cliente], onDelete: Cascade, onUpdate: NoAction, map: "fk_turno_cliente")
+  PRESTADOR     PRESTADOR              @relation(fields: [id_prestador], references: [id_prestador], onDelete: Cascade, onUpdate: NoAction, map: "fk_turno_prestador")
+  SERVICIO      SERVICIO               @relation(fields: [id_servicio], references: [id_servicio], onDelete: Cascade, onUpdate: NoAction, map: "fk_turno_servicio")
+  TURNO_FIJO    TURNO_FIJO?            @relation(fields: [id_turno_fijo], references: [id_turno_fijo], onDelete: SetNull, onUpdate: NoAction, map: "fk_turno_turno_fijo")
   RECORDATORIOS TURNO_RECORDATORIO[]
 
   @@index([id_cliente], map: "fk_turno_cliente")
   @@index([id_prestador], map: "fk_turno_prestador")
   @@index([id_servicio], map: "fk_turno_servicio")
+  @@index([id_turno_fijo], map: "fk_turno_turno_fijo")
+}
+
+model TURNO_FIJO {
+  id_turno_fijo      Int       @id @default(autoincrement())
+  id_empresa         Int
+  id_cliente         Int
+  id_prestador       Int
+  id_servicio        Int
+  dia_semana         Int       @db.TinyInt
+  hora               String    @db.VarChar(5)
+  frecuencia_semanas Int       @default(1)
+  fecha_inicio       DateTime  @db.Date
+  fecha_fin          DateTime? @db.Date
+  activo             Boolean   @default(true)
+  ultima_generacion  DateTime? @db.Date
+  created_at         DateTime? @default(now()) @db.DateTime(0)
+
+  EMPRESA   EMPRESA   @relation(fields: [id_empresa], references: [id_empresa], onDelete: Cascade, onUpdate: NoAction, map: "fk_tf_empresa")
+  CLIENTE   CLIENTE   @relation(fields: [id_cliente], references: [id_cliente], onDelete: Cascade, onUpdate: NoAction, map: "fk_tf_cliente")
+  PRESTADOR PRESTADOR @relation(fields: [id_prestador], references: [id_prestador], onDelete: Cascade, onUpdate: NoAction, map: "fk_tf_prestador")
+  SERVICIO  SERVICIO  @relation(fields: [id_servicio], references: [id_servicio], onDelete: Cascade, onUpdate: NoAction, map: "fk_tf_servicio")
+  TURNOS    TURNO[]
+
+  @@index([id_empresa], map: "fk_tf_empresa")
+  @@index([id_empresa, activo], map: "idx_tf_activo")
 }
 
 model TURNO_RECORDATORIO {

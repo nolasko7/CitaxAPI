@@ -163,21 +163,27 @@ router.get('/', async (req, res) => {
             `${hasta} 23:59:59`,
         ]);
 
-        const formatted = rows.map(appt => ({
-            id: appt.id_turno,
-            id_servicio: appt.id_servicio,
-            id_prestador: appt.id_prestador,
-            fecha: formatDateLocal(appt.fecha_hora),
-            hora_inicio: formatTimeLocal(appt.fecha_hora),
-            estado: appt.estado,
-            origen: inferAppointmentOrigin({ origen: appt.turno_origen, estado: appt.estado }),
-            cliente_nombre: appt.nombre_wa || 'Sin nombre',
-            cliente_whatsapp: appt.whatsapp_id.startsWith('manual_') ? '' : (appt.whatsapp_id.includes('_') ? appt.whatsapp_id.split('_')[0] : appt.whatsapp_id),
-            cliente_email: appt.cliente_email || '',
-            prestador_nombre: appt.prestador_nombre,
-            prestador_apellido: appt.prestador_apellido,
-            servicio_nombre: appt.servicio_nombre
-        }));
+        const formatted = rows.map(appt => {
+            const rawOrigin = inferAppointmentOrigin({ origen: appt.turno_origen, estado: appt.estado });
+            const clientName = appt.nombre_wa || 'Sin nombre';
+            const displayName = rawOrigin === 'fijo' ? `(Fijo) ${clientName}` : clientName;
+
+            return {
+                id: appt.id_turno,
+                id_servicio: appt.id_servicio,
+                id_prestador: appt.id_prestador,
+                fecha: formatDateLocal(appt.fecha_hora),
+                hora_inicio: formatTimeLocal(appt.fecha_hora),
+                estado: appt.estado,
+                origen: rawOrigin,
+                cliente_nombre: displayName,
+                cliente_whatsapp: appt.whatsapp_id.startsWith('manual_') ? '' : (appt.whatsapp_id.includes('_') ? appt.whatsapp_id.split('_')[0] : appt.whatsapp_id),
+                cliente_email: appt.cliente_email || '',
+                prestador_nombre: appt.prestador_nombre,
+                prestador_apellido: appt.prestador_apellido,
+                servicio_nombre: appt.servicio_nombre
+            };
+        });
 
         res.json(formatted);
     } catch (err) {

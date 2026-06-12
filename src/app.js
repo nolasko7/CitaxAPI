@@ -15,6 +15,7 @@ const superadminRoutes = require("./routes/superadmin.routes");
 const publicRoutes = require("./routes/public.routes");
 const clientsRoutes = require("./routes/clients.routes");
 const remindersRoutes = require("./routes/reminders.routes");
+const fixedAppointmentsRoutes = require("./routes/fixedAppointments.routes");
 
 const app = express();
 
@@ -146,6 +147,7 @@ app.use("/api/superadmin", superadminRoutes);
 app.use("/api/public", publicRoutes);
 app.use("/api/clients", clientsRoutes);
 app.use("/api/reminders", remindersRoutes);
+app.use("/api/fixed-appointments", fixedAppointmentsRoutes);
 app.use("/embed/reserva", embedRoutes);
 
 // SPA fallback: serve index.html for client-side routes (embed, etc.)
