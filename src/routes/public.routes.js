@@ -372,6 +372,39 @@ router.get("/landing/:slug/availability", async (req, res) => {
   }
 });
 
+router.get("/landing/:slug/availability/blocked-dates", async (req, res) => {
+  try {
+    const slug = normalizeSlug(req.params.slug);
+    if (!slug) {
+      return res.status(400).json({ error: "Slug invalido" });
+    }
+
+    const { company } = await getLandingReadyCompany(slug);
+    if (!company) {
+      return res.status(404).json({ error: "Landing no encontrada" });
+    }
+
+    const prestadorId = req.query.prestador_id ? Number(req.query.prestador_id) : null;
+    let query = 'SELECT fecha, motivo, id_prestador FROM BLOCKED_DATES WHERE id_empresa = ? AND fecha >= CURDATE()';
+    let params = [company.id_empresa];
+
+    if (prestadorId) {
+      query += ' AND (id_prestador = ? OR id_prestador IS NULL)';
+      params.push(prestadorId);
+    }
+
+    const [rows] = await pool.execute(query, params);
+    res.json(rows.map(r => ({
+      fecha: r.fecha instanceof Date ? r.fecha.toISOString().split('T')[0] : r.fecha,
+      motivo: r.motivo,
+      prestador_id: r.id_prestador
+    })));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error obteniendo fechas bloqueadas públicas" });
+  }
+});
+
 router.post("/landing/:slug/appointments", async (req, res) => {
   const connection = await pool.getConnection();
 
@@ -425,6 +458,16 @@ router.post("/landing/:slug/appointments", async (req, res) => {
         error: "La empresa no tiene landing configurada",
         redirect_to_main: true,
       });
+    }
+
+    // Validate blocked dates
+    const [blockedRows] = await pool.execute(
+      'SELECT id FROM BLOCKED_DATES WHERE id_empresa = ? AND fecha = ? AND (id_prestador = ? OR id_prestador IS NULL)',
+      [company.id_empresa, date, professionalId]
+    );
+
+    if (blockedRows.length > 0) {
+      return res.status(400).json({ error: 'El negocio no trabaja ese día.' });
     }
 
     const [serviceRows] = await pool.execute(
@@ -588,4 +631,49 @@ router.post("/landing/:slug/appointments", async (req, res) => {
   }
 });
 
+router.post("/landing/:slug/feedback", async (req, res) => {
+  try {
+    const slug = normalizeSlug(req.params.slug);
+    const name = String(req.body.name || "").trim();
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const role = String(req.body.role || "otro").trim();
+    const comment = String(req.body.comment || "").trim();
+
+    if (!slug) {
+      return res.status(400).json({ error: "Slug invalido" });
+    }
+
+    if (!name || !email || !comment) {
+      return res.status(400).json({
+        error: "Nombre, email y comentarios son obligatorios",
+      });
+    }
+
+    const { company, landingTemplate } = await getLandingReadyCompany(slug);
+    if (!company) {
+      return res.status(404).json({ error: "Landing no encontrada" });
+    }
+
+    await pool.execute(
+      "INSERT INTO FEEDBACK (id_empresa, nombre, email, rol, comentario) VALUES (?, ?, ?, ?, ?)",
+      [company.id_empresa, name, email, role, comment]
+    );
+
+    if (company.whatsapp_number) {
+      try {
+        const messageText = `*Nuevo Feedback Recibido* — ${company.nombre_comercial}\n\n*Nombre:* ${name}\n*Email:* ${email}\n*Rol:* ${role}\n*Comentarios:* ${comment}`;
+        await sendTextMessage(company.whatsapp_number, messageText, SUPPORT_INSTANCE_NAME);
+      } catch (err) {
+        console.error("Error al notificar feedback por WhatsApp:", err.message);
+      }
+    }
+
+    res.status(201).json({ message: "Feedback registrado con éxito" });
+  } catch (error) {
+    console.error("Error registrando feedback:", error);
+    res.status(500).json({ error: "Error interno al registrar el feedback" });
+  }
+});
+
 module.exports = router;
+

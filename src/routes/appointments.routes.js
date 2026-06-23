@@ -393,6 +393,17 @@ router.put('/:id', async (req, res) => {
             }
 
             if (!force) {
+                const targetDate = fecha || formatDateLocal(appointment.fecha_hora);
+                const [blockedRows] = await connection.execute(
+                    'SELECT id FROM BLOCKED_DATES WHERE id_empresa = ? AND fecha = ? AND (id_prestador = ? OR id_prestador IS NULL)',
+                    [appointment.id_empresa, targetDate, nextPrestadorId]
+                );
+
+                if (blockedRows.length > 0) {
+                    await connection.rollback();
+                    return res.status(400).json({ error: 'El negocio no trabaja ese día.' });
+                }
+
                 const requestedStart = nextFechaHoraDate;
                 const requestedEnd = addMinutes(
                     requestedStart,

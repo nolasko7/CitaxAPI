@@ -2,7 +2,7 @@ const {
   parseBotConfig,
 } = require("../services/singleProviderMode.service");
 
-const KNOWN_LANDING_TEMPLATES = new Set(["sergio-pereira", "pepardo"]);
+const KNOWN_LANDING_TEMPLATES = new Set(["sergio-pereira", "pepardo", "unvimesi"]);
 
 const normalizeComparableText = (value) =>
   String(value || "")
@@ -26,6 +26,14 @@ const resolveImplicitLandingTemplate = ({ slug, nombre_comercial }) => {
 
   if (normalizedSlug === "pepardo") {
     return "pepardo";
+  }
+
+  if (normalizedSlug === "unvimesi" || normalizedSlug === "unvime-si") {
+    return "unvimesi";
+  }
+
+  if (normalizedName.includes("unvimesi") || normalizedName.includes("unvime si")) {
+    return "unvimesi";
   }
 
   return null;

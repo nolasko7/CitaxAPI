@@ -448,13 +448,13 @@ const listAvailableSlots = async ({
 
   if (!prestadores.length) return [];
 
-  // Fetch blocked dates for the range
+  // Fetch blocked dates for the range using UTC boundaries to avoid timezone exclusions
   const blockedDates = await prisma.bLOCKED_DATES.findMany({
     where: {
       id_empresa: companyId,
       fecha: {
-        gte: new Date(`${normalizedStart}T00:00:00`),
-        lte: new Date(`${normalizedEnd}T23:59:59`),
+        gte: new Date(`${normalizedStart}T00:00:00.000Z`),
+        lte: new Date(`${normalizedEnd}T23:59:59.999Z`),
       },
     },
   });
